@@ -566,13 +566,13 @@ impl Config {
 /// The config holds the subscription URL (a credential) and maybe proxy passwords.
 fn warn_if_exposed(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = std::fs::metadata(path) {
-        if meta.permissions().mode() & 0o077 != 0 {
-            crate::warn!(
-                "{} is readable by other users; it contains your subscription URL (chmod 600)",
-                path.display()
-            );
-        }
+    if let Ok(meta) = std::fs::metadata(path)
+        && meta.permissions().mode() & 0o077 != 0
+    {
+        crate::warn!(
+            "{} is readable by other users; it contains your subscription URL (chmod 600)",
+            path.display()
+        );
     }
 }
 
