@@ -133,6 +133,9 @@ impl Updater {
             self.store.save_meta(&meta)?;
             return Ok(Outcome::Kept(problem));
         };
+        for note in &content.notes {
+            crate::warn!("conversion: {note}");
+        }
         let body = &fetch.response.body;
         let source = self.source_id()?;
         let changed = meta.format.is_empty()

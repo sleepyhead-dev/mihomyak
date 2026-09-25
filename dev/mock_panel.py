@@ -4,8 +4,8 @@
 Reproduces the behaviour documented in docs/SUBSCRIPTIONS.md §2 so mihomyak can be
 exercised without a real subscription:
 
-* default Response Rules: browser → HTML, mihomo-family UA → YAML, else base64 links,
-  empty UA → 403;
+* default Response Rules: browser → HTML, mihomo-family UA → YAML, else base64 links
+  (Xray JSON for Happ & co. with --serve-json), empty UA → 403;
 * HWID device limit: `x-hwid` validated with ^[a-zA-Z0-9=-]{10,64}$, devices
   registered up to --device-limit, refusals answered with x-hwid-* headers and
   `0.0.0.0:1` remark stubs;
@@ -110,6 +110,49 @@ def link_to_mihomo(name, link):
     return proxy
 
 
+JSON_FALLBACK_UA = re.compile(r"^(?:[Ss]treisand|Happ/|INCY/|ktor-client|V2Box|v2rayNG/|v2rayN/|v2plus/)")
+
+
+def link_to_xray_outbound(link):
+    """Remnawave XrayJsonGeneratorService shape for the links the mock serves."""
+    m = link_to_mihomo("x", link)
+    stream = {"network": "tcp", "tcpSettings": {}}
+    if m["type"] == "ss":
+        return {"tag": "proxy", "protocol": "shadowsocks",
+                "settings": {"servers": [{"address": m["server"], "port": m["port"],
+                                          "method": m["cipher"], "password": m["password"]}]},
+                "streamSettings": {**stream, "security": "none"}}
+    if m["type"] == "trojan":
+        return {"tag": "proxy", "protocol": "trojan",
+                "settings": {"servers": [{"address": m["server"], "port": m["port"], "password": m["password"]}]},
+                "streamSettings": {**stream, "security": "tls", "tlsSettings": {"serverName": m["sni"]}}}
+    out = {"tag": "proxy", "protocol": "vless",
+           "settings": {"vnext": [{"address": m["server"], "port": m["port"],
+                                   "users": [{"id": m["uuid"], "encryption": "none", "flow": m.get("flow", "")}]}]},
+           "streamSettings": {**stream, "security": "none"}}
+    if "reality-opts" in m:
+        out["streamSettings"].update({"security": "reality", "realitySettings": {
+            "serverName": m["servername"], "publicKey": m["reality-opts"]["public-key"],
+            "shortId": m["reality-opts"]["short-id"], "fingerprint": "chrome"}})
+    return out
+
+
+def xray_json_body(proxies, remarks=None):
+    items = []
+    if remarks is not None:
+        for remark in remarks:
+            items.append({"remarks": remark, "outbounds": [
+                {"tag": "proxy", "protocol": "vless", "settings": {"vnext": [{"address": "0.0.0.0", "port": 1,
+                 "users": [{"id": "00000000-0000-0000-0000-000000000000", "encryption": "none", "flow": ""}]}]},
+                 "streamSettings": {"network": "tcp", "security": "none"}},
+                {"tag": "direct", "protocol": "freedom"}, {"tag": "block", "protocol": "blackhole"}]})
+    else:
+        for name, link in proxies:
+            items.append({"remarks": name, "outbounds": [link_to_xray_outbound(link),
+                          {"tag": "direct", "protocol": "freedom"}, {"tag": "block", "protocol": "blackhole"}]})
+    return json.dumps(items, ensure_ascii=False, separators=(",", ":"))
+
+
 def links_body(proxies, remarks=None):
     if remarks is not None:
         lines = [f"vless://00000000-0000-0000-0000-000000000000@0.0.0.0:1?security=none&type=tcp#"
@@ -168,6 +211,8 @@ def make_handler(panel: Panel):
                 return self.send(200, "<!doctype html><html><body>sub page</body></html>",
                                  ctype="text/html")
             response_type = "MIHOMO" if MIHOMO_UA.search(ua) else "XRAY_BASE64"
+            if response_type == "XRAY_BASE64" and panel.args.serve_json and JSON_FALLBACK_UA.search(ua):
+                response_type = "XRAY_JSON"
             usage = "upload=0; download=5368709120; total=107374182400; expire=%d" % (
                 time.time() + 30 * 86400)
             info = {
@@ -182,6 +227,8 @@ def make_handler(panel: Panel):
             def respond(remarks=None, extra=None):
                 if response_type == "MIHOMO":
                     body, ctype = yaml_config(panel.proxies(), remarks), "text/yaml; charset=utf-8"
+                elif response_type == "XRAY_JSON":
+                    body, ctype = xray_json_body(panel.proxies(), remarks), "application/json; charset=utf-8"
                 else:
                     body, ctype = links_body(panel.proxies(), remarks), "text/plain; charset=utf-8"
                 self.send(200, body, {**info, **(extra or {})}, ctype)
@@ -227,6 +274,8 @@ def main():
     parser.add_argument("--no-remarks", dest="show_remarks", action="store_false")
     parser.add_argument("--interval", type=int, default=12, help="profile-update-interval, hours")
     parser.add_argument("--proxy", action="append", help="share link to serve (repeatable)")
+    parser.add_argument("--serve-json", action="store_true",
+                        help="answer Happ-like clients with Xray JSON (serveJsonAtBaseSubscription)")
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), make_handler(Panel(args)))
     print(f"mock panel on http://{args.host}:{args.port}/sub/<any-token>", flush=True)

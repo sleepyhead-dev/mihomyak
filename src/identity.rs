@@ -18,6 +18,10 @@ pub struct Identity {
     pub os: OsRelease,
     /// `uname -r`, Koala's last-resort `x-ver-os`.
     pub kernel_release: String,
+    /// Kernel hostname (Happ's `X-Device-Model`).
+    pub hostname: String,
+    /// UI locale, e.g. `en` or `ru_RU` (Happ's `X-Device-Locale`).
+    pub locale: String,
 }
 
 impl Identity {
@@ -42,10 +46,17 @@ impl Identity {
         let kernel_release = std::fs::read_to_string("/proc/sys/kernel/osrelease")
             .map(|s| s.trim().to_owned())
             .unwrap_or_default();
+        let hostname = config.device.hostname.clone().unwrap_or_else(|| {
+            std::fs::read_to_string("/proc/sys/kernel/hostname")
+                .map(|s| s.trim().to_owned())
+                .unwrap_or_else(|_| "localhost".into())
+        });
         Ok(Self {
             machine_id,
             os,
             kernel_release,
+            hostname,
+            locale: config.device.locale.clone(),
         })
     }
 }

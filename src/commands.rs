@@ -160,6 +160,9 @@ fn fetch(config: Config, show_body: bool) -> Result<ExitCode> {
         for e in content.endpoints.iter().take(15) {
             println!("              - {} ({}:{})", e.name, e.server, e.port);
         }
+        for note in &content.notes {
+            println!("              ! {note}");
+        }
         if content.endpoints.len() > 15 {
             println!("              … {} more", content.endpoints.len() - 15);
         }

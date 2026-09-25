@@ -50,6 +50,18 @@ const STRIPPED_KEYS: &[&str] = &[
     "find-process-mode",
 ];
 
+/// Rules used when the subscription brings none: LAN direct, everything else proxied.
+const DEFAULT_RULES: &[&str] = &[
+    "IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
+    "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
+    "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve",
+    "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
+    "IP-CIDR,100.64.0.0/10,DIRECT,no-resolve",
+    "IP-CIDR6,fc00::/7,DIRECT,no-resolve",
+    "IP-CIDR6,fe80::/10,DIRECT,no-resolve",
+    "MATCH,PROXY",
+];
+
 /// Skeleton wrapped around share-link subscriptions (mihomo converts the links).
 fn links_skeleton() -> Value {
     let yaml = format!(
@@ -59,30 +71,61 @@ proxy-providers:
     type: file
     path: ./{PROVIDER_FILE}
     health-check: {{ enable: true, url: "{HEALTH_CHECK_URL}", interval: 600, lazy: true }}
-proxy-groups:
-  - name: PROXY
-    type: select
-    proxies: [AUTO, DIRECT]
-    use: [subscription]
-  - name: AUTO
-    type: url-test
-    use: [subscription]
-    url: "{HEALTH_CHECK_URL}"
-    interval: 600
-    tolerance: 50
-    lazy: true
-rules:
-  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
-  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
-  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
-  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
-  - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
-  - IP-CIDR6,fc00::/7,DIRECT,no-resolve
-  - IP-CIDR6,fe80::/10,DIRECT,no-resolve
-  - MATCH,PROXY
 "#
     );
     serde_norway::from_str(&yaml).expect("built-in skeleton is valid YAML")
+}
+
+/// Gives configs that only list proxies (link lists, Xray JSON, bare `proxies:`
+/// subscriptions) a `PROXY` selector, an `AUTO` url-test group and default rules.
+fn ensure_groups(map: &mut Mapping) {
+    let has_groups = map
+        .get("proxy-groups")
+        .and_then(Value::as_sequence)
+        .is_some_and(|g| !g.is_empty());
+    if has_groups {
+        return;
+    }
+    let names: Vec<Value> = map
+        .get("proxies")
+        .and_then(Value::as_sequence)
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p.get("name").cloned())
+        .collect();
+    let providers: Vec<Value> = map
+        .get("proxy-providers")
+        .and_then(Value::as_mapping)
+        .into_iter()
+        .flat_map(|m| m.keys().cloned())
+        .collect();
+    let group = |name: &str, kind: &str, proxies: Vec<Value>| {
+        let mut g = Mapping::new();
+        set(&mut g, "name", name);
+        set(&mut g, "type", kind);
+        set(&mut g, "proxies", Value::Sequence(proxies));
+        if !providers.is_empty() {
+            set(&mut g, "use", Value::Sequence(providers.clone()));
+        }
+        if kind == "url-test" {
+            set(&mut g, "url", HEALTH_CHECK_URL);
+            set(&mut g, "interval", 600);
+            set(&mut g, "tolerance", 50);
+            set(&mut g, "lazy", true);
+        }
+        Value::Mapping(g)
+    };
+    let mut select = vec![Value::from("AUTO")];
+    select.extend(names.iter().cloned());
+    select.push(Value::from("DIRECT"));
+    let groups = vec![
+        group("PROXY", "select", select),
+        group("AUTO", "url-test", names),
+    ];
+    set(map, "proxy-groups", Value::Sequence(groups));
+    // Provider rules would reference groups that do not exist; ours route via PROXY.
+    let rules = DEFAULT_RULES.iter().map(|r| Value::from(*r)).collect();
+    set(map, "rules", Value::Sequence(rules));
 }
 
 pub struct Built {
@@ -93,7 +136,7 @@ pub struct Built {
 
 pub fn build(content: &Content, config: &Config, secret: &str, mode: &str) -> Result<Built> {
     let (mut root, provider) = match content.format {
-        Format::Mihomo => (
+        Format::Mihomo | Format::XrayJson => (
             content
                 .yaml
                 .clone()
@@ -111,6 +154,7 @@ pub fn build(content: &Content, config: &Config, secret: &str, mode: &str) -> Re
     for key in STRIPPED_KEYS {
         map.remove(*key);
     }
+    ensure_groups(map);
     apply_managed(map, config);
     // Like FlClashX, the client owns the routing mode: Remnawave's default
     // template ships `mode: global`, which would route through GLOBAL → DIRECT.
@@ -360,6 +404,32 @@ rules:
             v["rules"].as_sequence().unwrap().last().unwrap().as_str(),
             Some("MATCH,PROXY")
         );
+    }
+
+    #[test]
+    fn adds_groups_to_bare_proxy_lists() {
+        let content = parsed(
+            "proxies:\n  - {name: A, type: ss, server: a.example, port: 1080, cipher: aes-128-gcm, password: p}\nrules: [MATCH,DIRECT]\n",
+        );
+        let v = built(&content, &Config::default());
+        assert_eq!(v["proxy-groups"][0]["name"].as_str(), Some("PROXY"));
+        let members: Vec<_> = v["proxy-groups"][0]["proxies"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|m| m.as_str().unwrap())
+            .collect();
+        assert_eq!(members, ["AUTO", "A", "DIRECT"]);
+        assert_eq!(v["proxy-groups"][1]["proxies"][0].as_str(), Some("A"));
+        assert_eq!(
+            v["rules"].as_sequence().unwrap().last().unwrap().as_str(),
+            Some("MATCH,PROXY")
+        );
+
+        // A provider's own groups and rules are left alone.
+        let v = built(&parsed(REMNAWAVE), &Config::default());
+        assert_eq!(v["proxy-groups"].as_sequence().unwrap().len(), 1);
+        assert_eq!(v["rules"][0].as_str(), Some("MATCH,→ Remnawave"));
     }
 
     #[test]

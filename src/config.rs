@@ -35,6 +35,8 @@ pub struct Subscription {
     pub client: ClientKind,
     /// Overrides the emulated app version (e.g. `0.4.3`) without a rebuild.
     pub app_version: Option<String>,
+    /// Overrides Happ's build id (`Happ/<ver>/Linux/<build>…`).
+    pub app_build: Option<String>,
     /// Overrides the emulated mihomo core version shown in FlClashX's User-Agent.
     pub core_version: Option<String>,
     /// Replaces the User-Agent value (keeps the emulated header order).
@@ -55,6 +57,7 @@ impl Default for Subscription {
             url: None,
             client: ClientKind::FlClashX,
             app_version: None,
+            app_build: None,
             core_version: None,
             user_agent: None,
             headers: Vec::new(),
@@ -110,6 +113,11 @@ pub struct Device {
     pub os_name: Option<String>,
     pub os_version: Option<String>,
     pub os_pretty_name: Option<String>,
+    /// Hostname reported by Happ (`X-Device-Model: <hostname>_<arch>`).
+    /// Default: the kernel hostname (in Docker set `hostname:` in compose).
+    pub hostname: Option<String>,
+    /// UI locale reported by Happ: `en` (default) or e.g. `ru_RU`.
+    pub locale: String,
 }
 
 impl Default for Device {
@@ -122,6 +130,8 @@ impl Default for Device {
             os_name: None,
             os_version: None,
             os_pretty_name: None,
+            hostname: None,
+            locale: "en".into(),
         }
     }
 }
@@ -258,6 +268,12 @@ impl Config {
         }
         if let Some(v) = env("MIHOMYAK_HWID") {
             dev.hwid = Some(v);
+        }
+        if let Some(v) = env("MIHOMYAK_HOSTNAME") {
+            dev.hostname = Some(v);
+        }
+        if let Some(v) = env("MIHOMYAK_LOCALE") {
+            dev.locale = v;
         }
         if let Some(v) = env("MIHOMYAK_OS_RELEASE") {
             dev.os_release = PathBuf::from(v);
@@ -397,7 +413,7 @@ mod tests {
     fn rejects_unknown_keys_and_bad_values() {
         assert!(toml::from_str::<Config>("[subscription]\nurll = \"x\"").is_err());
         assert!(toml::from_str::<Config>("[subscription]\ninterval = \"10s\"").is_err());
-        assert!(toml::from_str::<Config>("[subscription]\nclient = \"happ\"").is_err());
+        assert!(toml::from_str::<Config>("[subscription]\nclient = \"hiddify\"").is_err());
     }
 
     #[test]

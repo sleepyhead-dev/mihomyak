@@ -34,6 +34,8 @@ pub enum Format {
     Mihomo,
     /// A list of share links (plain or base64).
     Links,
+    /// An Xray JSON config (Happ), converted to mihomo proxies.
+    XrayJson,
 }
 
 impl Format {
@@ -41,6 +43,7 @@ impl Format {
         match self {
             Format::Mihomo => "mihomo",
             Format::Links => "links",
+            Format::XrayJson => "xray-json",
         }
     }
 }
@@ -55,13 +58,16 @@ pub struct Endpoint {
 #[derive(Debug, Clone)]
 pub struct Content {
     pub format: Format,
-    /// Parsed YAML (merge keys applied) for [`Format::Mihomo`].
+    /// Parsed YAML (merge keys applied) for [`Format::Mihomo`], or the converted
+    /// `proxies:` document for [`Format::XrayJson`].
     pub yaml: Option<Value>,
     /// Decoded, newline-separated links for [`Format::Links`].
     pub links: Option<String>,
     pub endpoints: Vec<Endpoint>,
     /// The YAML references proxy-providers (proxies we cannot inspect).
     pub has_providers: bool,
+    /// Conversion caveats worth logging (Xray features mihomo lacks).
+    pub notes: Vec<String>,
 }
 
 pub fn parse(body: &[u8], content_type: Option<&str>) -> Result<Content, String> {
@@ -82,7 +88,7 @@ pub fn parse(body: &[u8], content_type: Option<&str>) -> Result<Content, String>
         return Err("got an HTML page: the panel did not recognise the client".into());
     }
     if text.starts_with('{') || text.starts_with('[') {
-        return Err(describe_json(text));
+        return parse_json(text);
     }
     if let Some(content) = parse_yaml(text) {
         return Ok(content);
@@ -102,15 +108,36 @@ pub fn parse(body: &[u8], content_type: Option<&str>) -> Result<Content, String>
     Err("unrecognised subscription format".into())
 }
 
-fn describe_json(text: &str) -> String {
-    let kind = if text.contains("\"outbounds\"") && text.contains("\"protocol\"") {
-        "an Xray JSON config"
-    } else if text.contains("\"outbounds\"") {
-        "a sing-box JSON config"
-    } else {
-        "JSON"
-    };
-    format!("got {kind}; only mihomo YAML and share links are supported (try client flclashx)")
+fn parse_json(text: &str) -> Result<Content, String> {
+    let json: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("invalid JSON body: {e}"))?;
+    if !super::xray::is_xray(&json) {
+        let kind = if text.contains("\"outbounds\"") {
+            "a sing-box JSON config"
+        } else {
+            "JSON"
+        };
+        return Err(format!(
+            "got {kind}; supported are mihomo YAML, share links and Xray JSON (try client flclashx)"
+        ));
+    }
+    let converted = super::xray::convert(&json)?;
+    let endpoints = converted
+        .proxies
+        .iter()
+        .filter_map(Value::as_mapping)
+        .filter_map(yaml_endpoint)
+        .collect();
+    let mut root = Mapping::new();
+    root.insert("proxies".into(), Value::Sequence(converted.proxies));
+    Ok(Content {
+        format: Format::XrayJson,
+        yaml: Some(Value::Mapping(root)),
+        links: None,
+        endpoints,
+        has_providers: false,
+        notes: converted.warnings,
+    })
 }
 
 fn parse_yaml(text: &str) -> Option<Content> {
@@ -142,6 +169,7 @@ fn parse_yaml(text: &str) -> Option<Content> {
         links: None,
         endpoints,
         has_providers,
+        notes: Vec::new(),
     })
 }
 
@@ -178,6 +206,7 @@ fn parse_links(text: &str) -> Option<Content> {
         endpoints: lines.iter().filter_map(|l| link_endpoint(l)).collect(),
         links: Some(lines.join("\n") + "\n"),
         has_providers: false,
+        notes: Vec::new(),
     })
 }
 
@@ -337,7 +366,7 @@ rules:
         assert!(err("", None).contains("empty"));
         assert!(err("<!DOCTYPE html><html></html>", None).contains("HTML"));
         assert!(err("anything", Some("text/html; charset=utf-8")).contains("HTML"));
-        assert!(err(r#"{"outbounds":[{"protocol":"vless"}]}"#, None).contains("Xray"));
+        assert!(err(r#"{"outbounds":[{"protocol":"freedom"}]}"#, None).contains("without proxy"));
         assert!(err(r#"{"outbounds":[{"type":"vless"}]}"#, None).contains("sing-box"));
         assert!(err("happ://crypt5/abc", None).contains("happ"));
         assert!(err("just some text", None).contains("unrecognised"));

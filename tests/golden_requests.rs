@@ -40,12 +40,18 @@ fn capture(emulation: &Emulation, response: &'static [u8]) -> (String, u16) {
 }
 
 fn emulation(kind: ClientKind) -> Emulation {
+    emulation_with_id(kind, "0d0af05ee8fd4dc29275718f2ce4dff1")
+}
+
+fn emulation_with_id(kind: ClientKind, machine_id: &str) -> Emulation {
     let mut config = Config::default();
     config.subscription.client = kind;
     let identity = Identity {
-        machine_id: "0d0af05ee8fd4dc29275718f2ce4dff1".into(),
+        machine_id: machine_id.into(),
         os: OsRelease::from_raw(UBUNTU_OS_RELEASE),
         kernel_release: "6.8.0-45-generic".into(),
+        hostname: "rpi-box".into(),
+        locale: "en".into(),
     };
     Emulation::new(&config, identity).unwrap()
 }
@@ -74,6 +80,29 @@ fn koala_request_is_byte_exact() {
     assert_golden(
         ClientKind::Koala,
         include_str!("fixtures/requests/koala-1.4.1-linux.http"),
+    );
+}
+
+#[test]
+fn happ_request_is_byte_exact() {
+    let emulation = emulation_with_id(ClientKind::Happ, "11112222333344445555666677778888");
+    let (sent, port) = capture(&emulation, OK);
+    // The capture is from the x64 build on a day with an even Moscow date;
+    // adapt the build id, CPU arch and daily marker to this run.
+    let now = mihomyak::util::now_unix();
+    let (build, arch) = if std::env::consts::ARCH == "aarch64" {
+        ("2609151456", "arm64")
+    } else {
+        ("2609151457", std::env::consts::ARCH)
+    };
+    let marker = mihomyak::emulation::happ_day_marker(now);
+    let expected = include_str!("fixtures/requests/happ-4.3.0-linux-x64.http")
+        .replace("{PORT}", &port.to_string())
+        .replace("2609151457698", &format!("{build}{marker}98"))
+        .replace("rpi-box_x86_64", &format!("rpi-box_{arch}"));
+    assert_eq!(
+        sent, expected,
+        "request differs from the captured Happ request"
     );
 }
 

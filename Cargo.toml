@@ -32,6 +32,7 @@ libc = "0.2"
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"], optional = true }
 ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+ruzstd = { version = "0.9.0", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_norway = "0.9"

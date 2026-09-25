@@ -1,0 +1,85 @@
+//! Validates generated configs with a real mihomo binary (`mihomo -t`).
+//!
+//! Skipped unless `MIHOMYAK_TEST_MIHOMO` points at a mihomo executable
+//! (CI downloads one; locally: `mihomyak core install --dest /tmp/mihomo`).
+
+use std::path::PathBuf;
+use std::process::Command;
+
+use mihomyak::config::Config;
+use mihomyak::subscription::body;
+
+fn mihomo() -> Option<PathBuf> {
+    let bin = std::env::var_os("MIHOMYAK_TEST_MIHOMO").map(PathBuf::from);
+    if bin.is_none() {
+        eprintln!("MIHOMYAK_TEST_MIHOMO not set: skipping real mihomo validation");
+    }
+    bin
+}
+
+fn validate(name: &str, body: &[u8], gateway: bool) {
+    let Some(bin) = mihomo() else { return };
+    let content = body::parse(body, None).unwrap_or_else(|e| panic!("{name}: {e}"));
+    assert!(content.notes.is_empty(), "{name}: {:?}", content.notes);
+    let mut config = Config::default();
+    config.gateway.enable = gateway;
+    let built = mihomyak::profile::build(&content, &config, "secret", "rule").unwrap();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join("config.yaml"), &built.config_yaml).unwrap();
+    if let Some(provider) = &built.provider {
+        let path = home.path().join(mihomyak::profile::PROVIDER_FILE);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, provider).unwrap();
+    }
+    let out = Command::new(&bin)
+        .arg("-t")
+        .arg("-d")
+        .arg(home.path())
+        .arg("-f")
+        .arg(home.path().join("config.yaml"))
+        .output()
+        .unwrap();
+    let log =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success() && log.contains("test is successful"),
+        "{name}: mihomo rejected the generated config:\n{log}\n---\n{}",
+        built.config_yaml
+    );
+}
+
+#[test]
+fn remnawave_mihomo_yaml() {
+    validate(
+        "remnawave-mihomo",
+        include_bytes!("fixtures/subscriptions/remnawave-mihomo.yaml"),
+        false,
+    );
+}
+
+#[test]
+fn remnawave_mihomo_yaml_gateway() {
+    validate(
+        "remnawave-mihomo+gateway",
+        include_bytes!("fixtures/subscriptions/remnawave-mihomo.yaml"),
+        true,
+    );
+}
+
+#[test]
+fn xray_json_conversion() {
+    validate(
+        "remnawave-xray",
+        include_bytes!("fixtures/subscriptions/remnawave-xray.json"),
+        false,
+    );
+}
+
+#[test]
+fn base64_links() {
+    validate(
+        "links",
+        include_bytes!("fixtures/subscriptions/links.b64.txt"),
+        false,
+    );
+}

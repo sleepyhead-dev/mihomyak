@@ -72,6 +72,7 @@ mod tests {
                 })
                 .collect(),
             has_providers,
+            notes: Vec::new(),
         }
     }
 

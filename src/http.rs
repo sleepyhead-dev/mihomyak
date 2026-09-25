@@ -5,7 +5,7 @@
 //! and Koala's axios), and every mainstream client normalises headers through the
 //! `http` crate (lower-case names, own ordering, implicit headers). The protocol
 //! subset needed here — one request per connection, `Content-Length`/chunked/close
-//! bodies, gzip/deflate/br — is small enough to own.
+//! bodies, gzip/deflate/br/zstd — is small enough to own.
 //!
 //! The caller supplies the complete, ordered header list (including `Host`); the
 //! client adds nothing except `Content-Length` for requests with a body.
@@ -564,6 +564,11 @@ fn decode(mut body: Vec<u8>, encodings: &str, max_body: usize) -> Result<Vec<u8>
                 brotli_decompressor::Decompressor::new(&body[..], 4096),
                 max_body,
             )?,
+            "zstd" => inflate(
+                ruzstd::decoding::StreamingDecoder::new(&body[..])
+                    .map_err(|e| anyhow!("zstd: {e}"))?,
+                max_body,
+            )?,
             other => bail!("unsupported Content-Encoding {other:?}"),
         };
     }
@@ -684,6 +689,15 @@ mod tests {
         .into_bytes();
         raw.extend_from_slice(&gz);
         assert_eq!(parse(&raw).body, b"proxies: []");
+    }
+
+    #[test]
+    fn decodes_zstd() {
+        let packed = ruzstd::encoding::compress_to_vec(
+            &b"proxies: []"[..],
+            ruzstd::encoding::CompressionLevel::Fastest,
+        );
+        assert_eq!(decode(packed, "zstd", 1024).unwrap(), b"proxies: []");
     }
 
     #[test]

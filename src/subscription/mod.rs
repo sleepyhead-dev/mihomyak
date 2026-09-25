@@ -3,6 +3,7 @@
 pub mod body;
 pub mod headers;
 pub mod stub;
+pub mod xray;
 
 use anyhow::{Context, Result, bail};
 

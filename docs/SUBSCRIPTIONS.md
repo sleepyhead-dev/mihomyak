@@ -319,10 +319,12 @@ Connection: keep-alive
 - дополнительно понимает `profile-web-page-name`, `profile-logo`, `expand-proxy-groups`,
   `profile-update-interval` (часы; блокирует ручное изменение интервала).
 
-### 7.3 Happ Desktop 4.3.0 (Qt 6, ядро xray) — только для справки
+### 7.3 Happ Desktop 4.3.0 (Qt 6, ядро xray)
 
-По решению владельца проекта Happ **не имитируется** (у него xray-ядро, а mihomyak работает
-только с mihomo). Данные сохранены на будущее.
+Имитируется профилем `happ`. У Happ xray-ядро, поэтому панель отдаёт ему base64-ссылки
+(их понимает mihomo) или Xray JSON (mihomyak конвертирует его в прокси mihomo, §9).
+Sing-box в Happ Desktop — только TUN-движок (`tun-type: singbox|tun2proxy|xray|default`),
+на формат подписки он не влияет.
 
 **[cap]** (Linux x64, Qt QNetworkAccessManager):
 
@@ -357,12 +359,25 @@ Accept-Language: en,*
 
 Под Happ Remnawave отдаёт `XRAY_BASE64` или `XRAY_JSON` (если включено
 `serveJsonAtBaseSubscription`; Happ в списке `JSON_SUBSCRIPTION_FALLBACK_CLIENTS`).
+Remnawave XRAY_JSON — это **массив** полных Xray-конфигов, по одному на хост, с `remarks`
+и outbound'ом `tag: "proxy"` (`xray-json.generator.service.ts`).
+
+Что mihomyak делает так же, как оригинал, но не проверено захватом (помечено в коде):
+`Accept-Language` для локалей, кроме `en` и `ru_RU`; `X-Ver-Os` для дистрибутивов без
+`ID`/`VERSION_ID` (Qt вернёт `unknown`).
 
 Android-версия Happ (по сторонним данным, **не проверено**): `User-Agent: Happ/<ver>`,
 `X-Device-Os: Android`, `X-Ver-Os: <android>`, `X-Device-Model: <model>`,
 `X-Hwid: <16 hex>`, `X-Device-Locale`, `X-Real-Ip`, `X-Forwarded-For`.
 
 ---
+
+### 7.4 Один machine-id — разные HWID
+
+FlClashX шлёт `sha256(machine-id)[:16]` в **верхнем** регистре, Koala — в **нижнем**,
+Happ — сырой machine-id. Remnawave сравнивает HWID как строку, поэтому **смена
+эмулируемого клиента на той же машине занимает новый слот устройства** (проверено
+на мок-панели с лимитом 1). Выберите клиента один раз.
 
 ## 8. Что осталось за рамками точной имитации
 
@@ -372,8 +387,12 @@ Android-версия Happ (по сторонним данным, **не пров
 - **ALPN.** Ни Dart HttpClient, ни Node https (axios) по умолчанию не шлют ALPN,
   mihomyak тоже. HTTP/2 не используется никем из трёх.
 - **Сжатие.** mihomyak заявляет ровно те кодировки, что и оригинал, и умеет их
-  распаковывать (`gzip`, `deflate`, `br`; `compress` (LZW) у Koala объявлен, но серверы
-  его не используют).
+  распаковывать (`gzip`, `deflate`, `br`, `zstd`; `compress` (LZW) у Koala объявлен,
+  но серверы его не используют).
+- **Зашифрованные ссылки `happ://crypt…/`** не расшифровываются: нужна обычная https-ссылка.
+- **Xray JSON → mihomo** теряет то, чего нет в mihomo: `sockopt.dialerProxy` (цепочки,
+  fragment), Xray mux, транспорт kcp, finalmask hysteria. Такие хосты пропускаются или
+  конвертируются без опции, с предупреждением в логе.
 - **IDN-домены** (`.рф`) не поддерживаются: нужен punycode.
 
 ## 9. Практические выводы (что реализовано в mihomyak)
@@ -384,6 +403,10 @@ Android-версия Happ (по сторонним данным, **не пров
 3. HWID проверяется регуляркой Remnawave `^[a-zA-Z0-9=-]{10,64}$` до отправки.
 4. Заглушка определяется по заголовкам `x-hwid-*` и по серверам `0.0.0.0` / `127.0.0.1`
    / порт ≤ 1. Заглушка не заменяет последний рабочий конфиг.
-5. Интервал обновления берётся из `profile-update-interval` (как у обоих клиентов),
+5. Интервал обновления берётся из `profile-update-interval` (как у всех трёх клиентов),
    по умолчанию 24 ч (как у FlClashX).
 6. `flclashx-newdomain` обрабатывается как у FlClashX: новый хост сохраняется.
+7. Режим маршрутизации принадлежит клиенту (как у FlClashX): `mode: global` из шаблона
+   Remnawave игнорируется, иначе трафик ушёл бы через `GLOBAL → DIRECT`.
+8. Xray JSON конвертируется по той же таблице полей, что использует генератор mihomo
+   в самом Remnawave (`mihomo.generator.service.ts`), и проверяется `mihomo -t` в тестах.

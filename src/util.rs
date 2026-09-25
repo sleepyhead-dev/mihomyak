@@ -31,6 +31,11 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year, month, day)
 }
 
+/// Day of month (1–31) of a unix time, in UTC.
+pub fn day_of_month(unix: u64) -> u32 {
+    civil_from_days((unix as i64).div_euclid(86_400)).2
+}
+
 /// `2026-09-25T21:40:05Z`
 pub fn fmt_timestamp(unix: u64) -> String {
     let secs = unix as i64;

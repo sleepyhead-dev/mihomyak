@@ -18,6 +18,55 @@ pub const FLCLASHX_VERSION: &str = "0.4.2";
 pub const FLCLASHX_CORE_VERSION: &str = "v1.19.28";
 /// Koala Clash `package.json` version (`koala-clash/<this>`).
 pub const KOALA_VERSION: &str = "1.4.1";
+/// Happ Desktop for Linux release (`Happ/<this>/Linux/…`, `X-App-Version`).
+pub const HAPP_VERSION: &str = "4.3.0";
+/// Build ids compiled into the Happ 4.3.0 Linux x64 / arm64 binaries.
+pub const HAPP_BUILD_X64: &str = "2609151457";
+pub const HAPP_BUILD_ARM64: &str = "2609151456";
+
+/// Happ's rolling User-Agent marker, reverse-engineered from the 4.3.0 binary:
+/// `(QDateTime::currentDateTimeUtc().addSecs(10800).date().day() & 1) ? '5' : '6'`,
+/// i.e. it flips daily with the day of month in Moscow time (UTC+3).
+pub fn happ_day_marker(unix: u64) -> char {
+    if crate::util::day_of_month(unix + 3 * 3600) % 2 == 1 {
+        '5'
+    } else {
+        '6'
+    }
+}
+
+/// `QSysInfo::currentCpuArchitecture()` for this machine.
+fn qt_cpu_arch() -> &'static str {
+    match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86" => "i386",
+        other => other,
+    }
+}
+
+/// Happ ships only x64 and arm64 Linux builds.
+fn happ_default_build() -> &'static str {
+    if std::env::consts::ARCH == "aarch64" {
+        HAPP_BUILD_ARM64
+    } else {
+        HAPP_BUILD_X64
+    }
+}
+
+/// (`X-Device-Locale`, `Accept-Language`) as Qt produces them for a POSIX locale.
+/// Verified: `en`/C → (`EN`, `en,*`), `ru_RU` → (`RU`, `ru-RU,en,*`).
+fn happ_locale(locale: &str) -> (String, String) {
+    let locale = locale.split(['.', '@']).next().unwrap_or_default();
+    let (lang, region) = match locale.split_once(['_', '-']) {
+        Some((l, r)) => (l.to_ascii_lowercase(), Some(r.to_ascii_uppercase())),
+        None => (locale.to_ascii_lowercase(), None),
+    };
+    match (lang.as_str(), region) {
+        ("" | "c" | "posix" | "en", None) => ("EN".into(), "en,*".into()),
+        (_, Some(region)) => (lang.to_ascii_uppercase(), format!("{lang}-{region},en,*")),
+        (_, None) => (lang.to_ascii_uppercase(), format!("{lang},en,*")),
+    }
+}
 
 /// Remnawave ≥ 3.0 silently ignores HWIDs that do not match this pattern.
 pub fn is_valid_hwid(hwid: &str) -> bool {
@@ -34,6 +83,8 @@ pub enum ClientKind {
     FlClashX,
     /// Koala Clash (Electron, axios).
     Koala,
+    /// Happ Desktop (Qt, xray core): panels answer with share links or Xray JSON.
+    Happ,
     /// Generic client; requires an explicit User-Agent.
     Custom,
 }
@@ -45,8 +96,9 @@ impl std::str::FromStr for ClientKind {
         Ok(match s.to_ascii_lowercase().as_str() {
             "flclashx" | "flclash-x" | "flclash_x" => Self::FlClashX,
             "koala" | "koala-clash" | "koala_clash" => Self::Koala,
+            "happ" => Self::Happ,
             "custom" => Self::Custom,
-            _ => bail!("unknown client {s:?}: expected flclashx, koala or custom"),
+            _ => bail!("unknown client {s:?}: expected flclashx, koala, happ or custom"),
         })
     }
 }
@@ -64,6 +116,7 @@ impl std::fmt::Display for ClientKind {
         f.write_str(match self {
             Self::FlClashX => "flclashx",
             Self::Koala => "koala",
+            Self::Happ => "happ",
             Self::Custom => "custom",
         })
     }
@@ -82,6 +135,7 @@ pub struct DeviceHeaders {
 pub struct Emulation {
     pub kind: ClientKind,
     app_version: String,
+    app_build: String,
     core_version: String,
     user_agent: Option<String>,
     extra_headers: Vec<(String, String)>,
@@ -98,6 +152,7 @@ impl Emulation {
         }
         let default_version = match sub.client {
             ClientKind::Koala => KOALA_VERSION,
+            ClientKind::Happ => HAPP_VERSION,
             _ => FLCLASHX_VERSION,
         };
         let extra_headers = sub
@@ -112,6 +167,10 @@ impl Emulation {
                 .app_version
                 .clone()
                 .unwrap_or_else(|| default_version.into()),
+            app_build: sub
+                .app_build
+                .clone()
+                .unwrap_or_else(|| happ_default_build().into()),
             core_version: sub
                 .core_version
                 .clone()
@@ -132,6 +191,11 @@ impl Emulation {
     }
 
     pub fn user_agent(&self) -> String {
+        self.user_agent_at(crate::util::now_unix())
+    }
+
+    /// User-Agent at a given time (Happ's changes daily).
+    pub fn user_agent_at(&self, unix: u64) -> String {
         if let Some(ua) = &self.user_agent {
             return ua.clone();
         }
@@ -143,6 +207,13 @@ impl Emulation {
             ),
             // src/main/utils/userAgent.ts
             ClientKind::Koala => format!("koala-clash/{}", self.app_version),
+            // QString("Happ/%1/%2/%3%4%5").arg(version, "Linux", build, marker, "98")
+            ClientKind::Happ => format!(
+                "Happ/{}/Linux/{}{}98",
+                self.app_version,
+                self.app_build,
+                happ_day_marker(unix)
+            ),
             ClientKind::Custom => unreachable!("validated in Emulation::new"),
         }
     }
@@ -160,6 +231,21 @@ impl Emulation {
                 os: "Linux".into(),
                 os_version: id.os.get("VERSION_ID"),
                 model: id.os.get("NAME").unwrap_or_else(|| "Linux".into()),
+            },
+            // Captured from Happ 4.3.0: QSysInfo machineUniqueId / hostname_arch /
+            // productType_productVersion.
+            ClientKind::Happ => DeviceHeaders {
+                hwid: self
+                    .hwid_override
+                    .clone()
+                    .unwrap_or_else(|| id.machine_id.clone()),
+                os: "Linux".into(),
+                os_version: Some(format!(
+                    "{}_{}",
+                    id.os.get("ID").unwrap_or_else(|| "unknown".into()),
+                    id.os.get("VERSION_ID").unwrap_or_else(|| "unknown".into())
+                )),
+                model: format!("{}_{}", id.hostname, qt_cpu_arch()),
             },
             // src/main/utils/deviceInfo.ts (linux branches)
             ClientKind::Koala | ClientKind::Custom => {
@@ -225,6 +311,24 @@ impl Emulation {
                 headers.push(("Host", host));
                 headers.push(("Connection", "keep-alive".into()));
             }
+            ClientKind::Happ => {
+                // Qt QNetworkAccessManager: Host first, app headers in the order Happ
+                // sets them, then Qt's own Connection/Accept-Encoding/Accept-Language.
+                let (locale, accept_language) = happ_locale(&self.identity.locale);
+                headers.push(("Host", host));
+                headers.push(("User-Agent", ua));
+                headers.push(("X-App-Version", self.app_version.clone()));
+                headers.push(("X-Device-Locale", locale));
+                if let Some(d) = &dev {
+                    headers.push(("X-Device-Os", d.os.clone()));
+                    headers.push(("X-Device-Model", d.model.clone()));
+                    headers.push(("X-Hwid", d.hwid.clone()));
+                    headers.push(("X-Ver-Os", d.os_version.clone().unwrap_or_default()));
+                }
+                headers.push(("Connection", "Keep-Alive".into()));
+                headers.push(("Accept-Encoding", "zstd, br, gzip, deflate".into()));
+                headers.push(("Accept-Language", accept_language));
+            }
             ClientKind::Custom => {
                 headers.push(("Host", host));
                 headers.push(("User-Agent", ua));
@@ -266,7 +370,7 @@ mod tests {
     use crate::identity::OsRelease;
 
     const UBUNTU: &str =
-        "PRETTY_NAME=\"Ubuntu 24.04.3 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\n";
+        "PRETTY_NAME=\"Ubuntu 24.04.3 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nID=ubuntu\n";
 
     fn emulation(kind: ClientKind, os: &str) -> Emulation {
         let mut config = Config::default();
@@ -278,6 +382,8 @@ mod tests {
             machine_id: "0d0af05ee8fd4dc29275718f2ce4dff1".into(),
             os: OsRelease::from_raw(os),
             kernel_release: "6.8.0-45-generic".into(),
+            hostname: "vm".into(),
+            locale: "en".into(),
         };
         Emulation::new(&config, identity).unwrap()
     }
@@ -350,6 +456,8 @@ mod tests {
             machine_id: "x".into(),
             os: OsRelease::from_raw(UBUNTU),
             kernel_release: String::new(),
+            hostname: "vm".into(),
+            locale: "en".into(),
         };
         let e = Emulation::new(&config, identity).unwrap();
         let h = e.headers(&Url::parse("https://s.example/a").unwrap());
@@ -368,6 +476,8 @@ mod tests {
             machine_id: "x".into(),
             os: OsRelease::default(),
             kernel_release: String::new(),
+            hostname: "vm".into(),
+            locale: "en".into(),
         };
         let e = Emulation::new(&config, identity).unwrap();
         let h = e.headers(&Url::parse("https://s.example/a").unwrap());
@@ -382,10 +492,65 @@ mod tests {
             machine_id: "x".into(),
             os: OsRelease::default(),
             kernel_release: String::new(),
+            hostname: "vm".into(),
+            locale: "en".into(),
         };
         assert!(Emulation::new(&config, identity).is_err());
         let e = emulation(ClientKind::Custom, UBUNTU);
         assert_eq!(e.user_agent(), "clash-verge/v2.4.0");
+    }
+
+    #[test]
+    fn happ_matches_capture() {
+        let e = emulation(ClientKind::Happ, UBUNTU);
+        // 2026-09-25T21:20:27Z is the 26th in Moscow: even day → '6'.
+        let ua = e.user_agent_at(1_790_371_227);
+        assert_eq!(ua, format!("Happ/4.3.0/Linux/{}698", happ_default_build()));
+        let d = e.device_headers();
+        assert_eq!(d.hwid, "0d0af05ee8fd4dc29275718f2ce4dff1");
+        assert_eq!(d.os_version.as_deref(), Some("ubuntu_24.04"));
+        assert_eq!(d.model, format!("vm_{}", qt_cpu_arch()));
+        let names: Vec<String> = e
+            .headers(&Url::parse("https://s.example/sub").unwrap())
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "Host",
+                "User-Agent",
+                "X-App-Version",
+                "X-Device-Locale",
+                "X-Device-Os",
+                "X-Device-Model",
+                "X-Hwid",
+                "X-Ver-Os",
+                "Connection",
+                "Accept-Encoding",
+                "Accept-Language"
+            ]
+        );
+    }
+
+    #[test]
+    fn happ_marker_flips_daily_in_moscow_time() {
+        assert_eq!(happ_day_marker(1_790_371_227), '6'); // 26th MSK
+        assert_eq!(happ_day_marker(1_790_371_227 - 86_400), '5'); // 25th MSK
+        // 22:00 UTC on the 25th is already the 26th in Moscow.
+        assert_eq!(happ_day_marker(1_790_373_600), '6');
+        assert_eq!(happ_day_marker(1_790_373_600 - 3600 * 2), '5');
+    }
+
+    #[test]
+    fn happ_locales() {
+        assert_eq!(happ_locale("en"), ("EN".into(), "en,*".into()));
+        assert_eq!(happ_locale("C.UTF-8"), ("EN".into(), "en,*".into()));
+        assert_eq!(
+            happ_locale("ru_RU.UTF-8"),
+            ("RU".into(), "ru-RU,en,*".into())
+        );
+        assert_eq!(happ_locale("uk"), ("UK".into(), "uk,en,*".into()));
     }
 
     #[test]
@@ -407,6 +572,7 @@ mod tests {
             "koala-clash".parse::<ClientKind>().unwrap(),
             ClientKind::Koala
         );
-        assert!("happ".parse::<ClientKind>().is_err());
+        assert_eq!("Happ".parse::<ClientKind>().unwrap(), ClientKind::Happ);
+        assert!("v2rayng".parse::<ClientKind>().is_err());
     }
 }
