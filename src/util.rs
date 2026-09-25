@@ -149,17 +149,60 @@ pub fn random_hex(bytes: usize) -> Result<String> {
 /// Writes a file via a temporary sibling + rename so readers never observe a
 /// half-written config (mihomo may reload it at any moment).
 pub fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
+    let tmp = write_temp(path, data)?;
+    fs::rename(&tmp, path)
+        .inspect_err(|_| {
+            let _ = fs::remove_file(&tmp);
+        })
+        .with_context(|| format!("rename to {}", path.display()))
+}
+
+/// Like [`write_atomic`] but never replaces an existing file. Returns `false` if
+/// `path` already existed (another process won the race), leaving it untouched.
+pub fn write_new(path: &Path, data: &[u8]) -> Result<bool> {
+    let tmp = write_temp(path, data)?;
+    let linked = fs::hard_link(&tmp, path);
+    let _ = fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e).with_context(|| format!("create {}", path.display())),
+    }
+}
+
+/// Writes `data` to a fresh, uniquely named file next to `path` and syncs it.
+fn write_temp(path: &Path, data: &[u8]) -> Result<std::path::PathBuf> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
     let dir = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     let tmp = dir.join(format!(
-        ".{}.tmp",
-        path.file_name().and_then(|n| n.to_str()).unwrap_or("file")
+        ".{}.{}.{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("file"),
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
-    let mut file = fs::File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
-    file.write_all(data)?;
-    file.sync_all()?;
-    drop(file);
-    fs::rename(&tmp, path).with_context(|| format!("rename to {}", path.display()))
+    let result = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut file| {
+            file.write_all(data)?;
+            file.sync_all()
+        });
+    if let Err(e) = result {
+        let _ = fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("write {}", tmp.display()));
+    }
+    Ok(tmp)
+}
+
+/// Replaces control characters (terminal escapes, fake log lines) in text that
+/// comes from a provider before it is printed or logged.
+pub fn sanitize(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 /// Percent-encodes one URL path segment (mihomo proxy/group names are arbitrary
@@ -212,6 +255,25 @@ mod tests {
         assert!(sha256_hex(b"0d0af05ee8fd4dc29275718f2ce4dff1").starts_with("a3b522eaa6f7dd89"));
         assert_eq!(sha256_hex(b"").len(), 64);
         assert_eq!(random_hex(16).unwrap().len(), 32);
+    }
+
+    #[test]
+    fn writes_files_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f");
+        write_atomic(&path, b"1").unwrap();
+        write_atomic(&path, b"2").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"2");
+        assert!(!write_new(&path, b"3").unwrap());
+        assert_eq!(fs::read(&path).unwrap(), b"2");
+        assert!(write_new(&dir.path().join("g"), b"4").unwrap());
+        // No temporary files are left behind.
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn sanitizes_control_characters() {
+        assert_eq!(sanitize("ok\x1b[31mred\nINFO fake"), "ok [31mred INFO fake");
     }
 
     #[test]

@@ -9,6 +9,7 @@
 //!
 //! No async runtime: the supervisor idles in `recv_timeout` (≈4 MiB RSS measured).
 
+use std::collections::VecDeque;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -17,13 +18,17 @@ use anyhow::{Context, Result, bail};
 use signal_hook::consts::{SIGCHLD, SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
-use crate::api::Api;
+use crate::api::{Api, Rejected};
 use crate::config::Config;
 use crate::core::{self, CoreProcess};
 use crate::updater::{self, Outcome, Updater};
 use crate::util::now_unix;
 
-const STOP_GRACE: Duration = Duration::from_secs(10);
+/// Below Docker's default 10 s stop timeout, so mihomo gets to clean up TUN routes
+/// before the container runtime resorts to SIGKILL.
+const STOP_GRACE: Duration = Duration::from_secs(8);
+/// How long a freshly started core may take before its API answers.
+const API_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RESTART_BACKOFF: Duration = Duration::from_secs(60);
 const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(3600);
 /// A core that ran this long is considered healthy again (backoff resets).
@@ -37,17 +42,8 @@ enum Event {
 
 pub fn run(config: Config) -> Result<()> {
     let updater = Updater::new(config)?;
-    let store = updater.store.clone();
-    if let Some(pid) = store.supervisor_pid() {
-        bail!(
-            "another supervisor (pid {pid}) already uses {}",
-            store.root().display()
-        );
-    }
-    store.write_pid()?;
-    let result = Supervisor::new(updater)?.run();
-    store.remove_pid();
-    result
+    let _lock = updater.store.lock_supervisor()?;
+    Supervisor::new(updater)?.run()
 }
 
 struct Supervisor {
@@ -56,6 +52,8 @@ struct Supervisor {
     bin: std::path::PathBuf,
     core: Option<CoreProcess>,
     events: mpsc::Receiver<Event>,
+    /// Events received while waiting for something else, handled next.
+    deferred: VecDeque<Event>,
     /// Unix time of the next subscription update (`None`: only on demand).
     next_update: Option<u64>,
     update_failures: u32,
@@ -91,6 +89,7 @@ impl Supervisor {
             bin,
             core: None,
             events: rx,
+            deferred: VecDeque::new(),
             next_update: Some(now_unix()),
             update_failures: 0,
             restart_at: None,
@@ -110,15 +109,32 @@ impl Supervisor {
             "subscription {}",
             crate::subscription::redact(&self.updater.url()?)
         );
+        if !self.updater.config.update.cron.is_empty() {
+            crate::info!(
+                "cron schedules use local time UTC{} (set TZ to change it)",
+                crate::schedule::utc_offset(now_unix())
+            );
+        }
         if !self.prepare()? {
             return Ok(());
         }
         if let Some(dir) = &self.updater.config.core.geodata_dir {
             core::seed_geodata(dir, &self.updater.store.mihomo_home());
         }
-        self.start_core()?;
+        if self.api.version().is_ok() {
+            bail!(
+                "something already answers on the mihomo controller {}: stop the other mihomo or change core.controller",
+                self.updater.config.core.controller
+            );
+        }
+        // prepare() has just written config.yaml: no need to rebuild it.
+        self.start_core(false)?;
         loop {
-            match self.events.recv_timeout(self.wait_time()) {
+            let event = match self.deferred.pop_front() {
+                Some(event) => Ok(event),
+                None => self.events.recv_timeout(self.wait_time()),
+            };
+            match event {
                 Ok(Event::Stop) | Err(RecvTimeoutError::Disconnected) => break,
                 Ok(Event::Update) => {
                     crate::info!("update requested");
@@ -128,7 +144,7 @@ impl Supervisor {
                 Err(RecvTimeoutError::Timeout) => {
                     if self.restart_at.is_some_and(|at| at <= Instant::now()) {
                         self.restart_at = None;
-                        if let Err(e) = self.start_core() {
+                        if let Err(e) = self.start_core(true) {
                             crate::error!("{e:#}");
                             self.schedule_restart();
                         }
@@ -159,7 +175,11 @@ impl Supervisor {
             };
             crate::info!(
                 "using the cached subscription; next update {}",
-                describe_next(next)
+                if self.updater.config.update.on_start {
+                    "now (update.on_start)".to_owned()
+                } else {
+                    describe_next(next)
+                }
             );
             self.set_next_update(next);
             return Ok(true);
@@ -200,8 +220,9 @@ impl Supervisor {
                 if let Some(announce) = &info.announce {
                     crate::info!("provider announcement: {announce}");
                 }
-                if changed || self.core.is_none() {
-                    self.reload_core();
+                if changed && !self.reload_core() {
+                    self.schedule_retry();
+                    return false;
                 }
                 true
             }
@@ -245,10 +266,10 @@ impl Supervisor {
             .unwrap_or_default()
     }
 
-    fn start_core(&mut self) -> Result<()> {
-        // Re-render from the cache so runtime choices (e.g. `mihomyak mode`) survive
-        // a core crash/restart even before the next subscription update.
-        if let Err(e) = self.updater.restore() {
+    /// `rebuild`: re-render config.yaml from the cache first, so runtime choices
+    /// (e.g. `mihomyak mode`) survive a core crash even before the next update.
+    fn start_core(&mut self, rebuild: bool) -> Result<()> {
+        if rebuild && let Err(e) = self.updater.restore() {
             crate::warn!("could not refresh config.yaml from the cache: {e:#}");
         }
         let home = self.updater.store.mihomo_home();
@@ -257,74 +278,104 @@ impl Supervisor {
         Ok(())
     }
 
+    /// Waits until the core's API lists groups. Signals arriving meanwhile are
+    /// kept for the main loop; a stop request or a dead core ends the wait early.
+    fn wait_for_api(&mut self) -> Option<crate::api::Snapshot> {
+        let deadline = Instant::now() + API_READY_TIMEOUT;
+        loop {
+            match self.api.snapshot() {
+                Ok(s) if !s.groups.is_empty() => return Some(s),
+                _ if Instant::now() >= deadline => {
+                    crate::warn!("mihomo API not ready; default groups not selected");
+                    return None;
+                }
+                _ => {}
+            }
+            match self.events.recv_timeout(Duration::from_millis(200)) {
+                Ok(event) => {
+                    let stop = matches!(event, Event::Stop);
+                    self.deferred.push_back(event);
+                    let exited = self
+                        .core
+                        .as_mut()
+                        .is_none_or(|core| matches!(core.try_wait(), Ok(Some(_))));
+                    if stop || exited {
+                        return None;
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return None,
+            }
+        }
+    }
+
     /// `[[groups]] default = true`: make selectors use these groups. mihomo
     /// restores the previous choice from cache.db (store-selected), so the default
     /// is applied explicitly whenever the core starts or gets a new subscription.
-    fn select_default_groups(&self) {
-        let defaults: Vec<&str> = self
+    fn select_default_groups(&mut self) {
+        let defaults: Vec<String> = self
             .updater
             .config
             .groups
             .iter()
             .filter(|g| g.default)
-            .map(|g| g.name.as_str())
+            .map(|g| g.name.clone())
             .collect();
         if defaults.is_empty() {
             return;
         }
-        let deadline = Instant::now() + Duration::from_secs(15);
-        let snapshot = loop {
-            match self.api.snapshot() {
-                Ok(s) if !s.groups.is_empty() => break s,
-                _ if Instant::now() >= deadline => {
-                    crate::warn!("mihomo API not ready; default groups not selected");
-                    return;
-                }
-                _ => std::thread::sleep(Duration::from_millis(200)),
-            }
+        let Some(snapshot) = self.wait_for_api() else {
+            return;
         };
-        for group in snapshot
-            .groups
-            .iter()
-            .filter(|g| g.selectable() && g.name != "GLOBAL")
-        {
-            let Some(default) = group
-                .members
-                .iter()
-                .find(|m| defaults.contains(&m.as_str()))
-            else {
+        for group in snapshot.groups.iter().filter(|g| g.is_user_selector()) {
+            let Some(default) = group.members.iter().find(|m| defaults.contains(m)) else {
                 continue;
             };
             if group.now.as_ref() == Some(default) {
                 continue;
             }
             match self.api.select(&group.name, default) {
-                Ok(()) => crate::info!("{} → {default} (default group)", group.name),
+                Ok(()) => crate::info!(
+                    "{} → {default} (default group)",
+                    crate::util::sanitize(&group.name)
+                ),
                 Err(e) => crate::warn!("could not select {default} in {}: {e:#}", group.name),
             }
         }
     }
 
-    /// Applies the freshly written config: hot reload, or restart as a fallback.
-    fn reload_core(&mut self) {
+    /// Applies the freshly written config by hot reload. If mihomo refuses it, the
+    /// previous files are restored (the core keeps running the old config) and
+    /// `false` is returned. If the API is unreachable, the core is restarted.
+    fn reload_core(&mut self) -> bool {
         if self.core.is_none() {
-            return;
+            // Crashed and waiting for a restart, which will pick the new config up.
+            return true;
         }
         let path = self.updater.store.mihomo_config();
         match self.api.reload(&path) {
             Ok(()) => {
                 crate::info!("mihomo reloaded the new config");
                 self.select_default_groups();
+                true
+            }
+            Err(e) if e.downcast_ref::<Rejected>().is_some() => {
+                crate::error!("mihomo rejected the new config ({e:#}); keeping the previous one");
+                if let Err(e) = self.updater.rollback(&format!("{e:#}")) {
+                    crate::error!("rollback failed: {e:#}");
+                }
+                false
             }
             Err(e) => {
                 crate::warn!("hot reload failed ({e:#}); restarting mihomo");
                 if let Some(core) = self.core.take() {
                     core.stop(STOP_GRACE);
                 }
-                if let Err(e) = self.start_core() {
+                if let Err(e) = self.start_core(false) {
                     crate::error!("{e:#}");
                     self.schedule_restart();
                 }
+                true
             }
         }
     }

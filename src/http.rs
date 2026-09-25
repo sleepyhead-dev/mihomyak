@@ -9,17 +9,24 @@
 //!
 //! The caller supplies the complete, ordered header list (including `Host`); the
 //! client adds nothing except `Content-Length` for requests with a body.
+//!
+//! The server is untrusted: every line, header block, chunk, trailer section and the
+//! decoded body are bounded, and the whole exchange has a wall-clock deadline so a
+//! server trickling one byte per `io_timeout` cannot hold the supervisor forever.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, TcpStream, ToSocketAddrs};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 
 const MAX_HEAD_BYTES: usize = 64 * 1024;
+const MAX_LINE_BYTES: usize = 16 * 1024;
+const MAX_TRAILERS: usize = 64;
+const MAX_INTERIM_RESPONSES: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scheme {
@@ -35,7 +42,7 @@ impl Scheme {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Scheme::Http => "http",
             Scheme::Https => "https",
@@ -56,6 +63,8 @@ pub struct Url {
 }
 
 impl Url {
+    /// Parses an absolute URL. Errors never echo the input: subscription URLs carry
+    /// the access token and error messages end up in logs.
     pub fn parse(input: &str) -> Result<Self> {
         let input = input.trim();
         let (scheme, rest) = if let Some(rest) = strip_prefix_ci(input, "https://") {
@@ -63,7 +72,7 @@ impl Url {
         } else if let Some(rest) = strip_prefix_ci(input, "http://") {
             (Scheme::Http, rest)
         } else {
-            bail!("unsupported URL {input:?}: expected http:// or https://");
+            bail!("unsupported URL: expected http:// or https://");
         };
         let rest = rest.split('#').next().unwrap_or_default();
         let (authority, target) = match rest.find(['/', '?']) {
@@ -74,12 +83,7 @@ impl Url {
             bail!("credentials inside the URL are not supported");
         }
         let (host, port) = split_host_port(authority)?;
-        if host.is_empty() {
-            bail!("URL {input:?} has no host");
-        }
-        if !host.is_ascii() {
-            bail!("internationalised domain {host:?} is not supported, use its punycode form");
-        }
+        validate_host(host)?;
         let target = if target.starts_with('?') {
             format!("/{target}")
         } else {
@@ -107,21 +111,38 @@ impl Url {
         }
     }
 
-    /// Resolves a `Location` header against this URL.
+    /// Resolves a `Location` header against this URL (RFC 3986 §5.2).
     pub fn join(&self, location: &str) -> Result<Self> {
         let location = location.trim();
-        if location.contains("://") {
+        let location = location.split('#').next().unwrap_or_default();
+        if has_scheme(location) {
             return Self::parse(location);
         }
         if let Some(rest) = location.strip_prefix("//") {
             return Self::parse(&format!("{}://{rest}", self.scheme.as_str()));
         }
-        let target = if location.starts_with('/') {
-            location.to_owned()
+        let base_path = self.target.split('?').next().unwrap_or("/");
+        let target = if location.is_empty() {
+            self.target.clone()
+        } else if location.starts_with('?') {
+            format!("{base_path}{location}")
         } else {
-            let path = self.target.split('?').next().unwrap_or("/");
-            let dir = &path[..=path.rfind('/').unwrap_or(0)];
-            format!("{dir}{location}")
+            let (path, query) = match location.split_once('?') {
+                Some((path, query)) => (path, Some(query)),
+                None => (location, None),
+            };
+            let merged = if path.starts_with('/') {
+                path.to_owned()
+            } else {
+                let dir = &base_path[..=base_path.rfind('/').unwrap_or(0)];
+                format!("{dir}{path}")
+            };
+            let mut target = remove_dot_segments(&merged);
+            if let Some(query) = query {
+                target.push('?');
+                target.push_str(query);
+            }
+            target
         };
         Ok(Self {
             target: encode_target(&target),
@@ -131,7 +152,12 @@ impl Url {
 
     /// Same URL with another host (FlClashX `flclashx-newdomain` behaviour).
     pub fn with_host(&self, host: &str) -> Result<Self> {
+        let host = host.trim();
+        if host.contains(['/', '?', '#', '@']) {
+            bail!("new domain must be a bare host[:port]");
+        }
         let (host, port) = split_host_port(host)?;
+        validate_host(host)?;
         Ok(Self {
             host: host.to_ascii_lowercase(),
             port: port.unwrap_or(self.port),
@@ -158,12 +184,50 @@ fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
         .then(|| &s[prefix.len()..])
 }
 
+/// RFC 3986 `scheme ":"` prefix: a letter, then letters, digits, `+`, `-`, `.`.
+fn has_scheme(reference: &str) -> bool {
+    let Some(colon) = reference.find(':') else {
+        return false;
+    };
+    let scheme = &reference[..colon];
+    scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))
+}
+
+/// RFC 3986 §5.2.4 for an absolute path.
+fn remove_dot_segments(path: &str) -> String {
+    let segments: Vec<&str> = path.split('/').skip(1).collect();
+    let last = segments.len().saturating_sub(1);
+    let mut out: Vec<&str> = Vec::with_capacity(segments.len());
+    for (i, segment) in segments.iter().enumerate() {
+        match *segment {
+            "." | ".." => {
+                if *segment == ".." {
+                    out.pop();
+                }
+                if i == last {
+                    out.push("");
+                }
+            }
+            s => out.push(s),
+        }
+    }
+    format!("/{}", out.join("/"))
+}
+
 fn split_host_port(authority: &str) -> Result<(&str, Option<u16>)> {
     let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
-        let end = rest
-            .find(']')
-            .ok_or_else(|| anyhow!("bad IPv6 host {authority:?}"))?;
-        (&rest[..end], rest[end + 1..].strip_prefix(':'))
+        let end = rest.find(']').ok_or_else(|| anyhow!("bad IPv6 host"))?;
+        let port = match &rest[end + 1..] {
+            "" => None,
+            tail => Some(
+                tail.strip_prefix(':')
+                    .ok_or_else(|| anyhow!("bad IPv6 host"))?,
+            ),
+        };
+        (&rest[..end], port)
     } else {
         match authority.rsplit_once(':') {
             Some((h, p)) => (h, Some(p)),
@@ -171,10 +235,28 @@ fn split_host_port(authority: &str) -> Result<(&str, Option<u16>)> {
         }
     };
     let port = match port {
-        Some(p) if !p.is_empty() => Some(p.parse().with_context(|| format!("bad port {p:?}"))?),
+        Some(p) if !p.is_empty() => Some(p.parse().map_err(|_| anyhow!("bad port in URL"))?),
         _ => None,
     };
     Ok((host, port))
+}
+
+/// Hosts go verbatim into the `Host` header and the TLS SNI, so only DNS names and
+/// IP literals are accepted (this also rules out header injection).
+fn validate_host(host: &str) -> Result<()> {
+    if host.is_empty() {
+        bail!("URL has no host");
+    }
+    if !host.is_ascii() {
+        bail!("internationalised domain names are not supported, use the punycode form");
+    }
+    if !host
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"-._:".contains(&b))
+    {
+        bail!("URL host contains invalid characters");
+    }
+    Ok(())
 }
 
 fn encode_target(target: &str) -> String {
@@ -223,6 +305,9 @@ pub struct Response {
     pub headers: Vec<(String, String)>,
     /// Body with `Content-Encoding` already removed.
     pub body: Vec<u8>,
+    /// Address of the server that answered (direct TCP only; `None` through a proxy
+    /// or a unix socket).
+    pub peer: Option<IpAddr>,
 }
 
 impl Response {
@@ -238,7 +323,10 @@ impl Response {
 #[derive(Clone, Debug)]
 pub struct Client {
     pub connect_timeout: Duration,
+    /// Longest silence between two reads or writes.
     pub io_timeout: Duration,
+    /// Wall-clock limit for the whole exchange, connect included.
+    pub total_timeout: Duration,
     /// Optional `http://host:port` proxy used via `CONNECT` for TCP endpoints.
     pub proxy: Option<Url>,
     pub max_body: usize,
@@ -248,7 +336,8 @@ impl Default for Client {
     fn default() -> Self {
         Self {
             connect_timeout: Duration::from_secs(15),
-            io_timeout: Duration::from_secs(60),
+            io_timeout: Duration::from_secs(30),
+            total_timeout: Duration::from_secs(90),
             proxy: None,
             max_body: 32 * 1024 * 1024,
         }
@@ -257,7 +346,13 @@ impl Default for Client {
 
 impl Client {
     pub fn send(&self, endpoint: &Endpoint, req: &Request<'_>) -> Result<Response> {
-        let mut stream = self.connect(endpoint)?;
+        let deadline = Instant::now() + self.total_timeout;
+        let (inner, peer) = self.connect(endpoint, deadline)?;
+        let mut stream = Stream {
+            inner,
+            deadline,
+            io_timeout: self.io_timeout,
+        };
         let mut head = format!("{} {} HTTP/1.1\r\n", req.method, req.target);
         for (name, value) in req.headers {
             head.push_str(&format!("{name}: {value}\r\n"));
@@ -274,44 +369,50 @@ impl Client {
         wire.extend_from_slice(req.body);
         stream.write_all(&wire).context("send request")?;
         stream.flush()?;
-        read_response(&mut stream, req.method, self.max_body)
+        let mut response = read_response(&mut stream, req.method, self.max_body)?;
+        response.peer = peer;
+        Ok(response)
     }
 
-    fn connect(&self, endpoint: &Endpoint) -> Result<Stream> {
+    fn connect(&self, endpoint: &Endpoint, deadline: Instant) -> Result<(Inner, Option<IpAddr>)> {
         match endpoint {
             Endpoint::Unix(path) => {
                 let sock = UnixStream::connect(path)
                     .with_context(|| format!("connect {}", path.display()))?;
-                sock.set_read_timeout(Some(self.io_timeout))?;
-                sock.set_write_timeout(Some(self.io_timeout))?;
-                Ok(Stream::Unix(sock))
+                Ok((Inner::Unix(sock), None))
             }
             Endpoint::Tcp { host, port, tls } => {
-                let tcp = match &self.proxy {
-                    Some(proxy) => self.tunnel(proxy, host, *port)?,
-                    None => self.dial(host, *port)?,
+                let (tcp, peer) = match &self.proxy {
+                    Some(proxy) => (self.tunnel(proxy, host, *port, deadline)?, None),
+                    None => {
+                        let tcp = self.dial(host, *port, deadline)?;
+                        let peer = tcp.peer_addr().ok().map(|a| a.ip());
+                        (tcp, peer)
+                    }
                 };
                 if !tls {
-                    return Ok(Stream::Tcp(tcp));
+                    return Ok((Inner::Tcp(tcp), peer));
                 }
                 let name = rustls::pki_types::ServerName::try_from(host.clone())
-                    .with_context(|| format!("invalid TLS server name {host:?}"))?;
+                    .context("invalid TLS server name")?;
                 let conn = rustls::ClientConnection::new(tls_config()?, name)?;
-                Ok(Stream::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))))
+                Ok((
+                    Inner::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))),
+                    peer,
+                ))
             }
         }
     }
 
-    fn dial(&self, host: &str, port: u16) -> Result<TcpStream> {
+    fn dial(&self, host: &str, port: u16, deadline: Instant) -> Result<TcpStream> {
         let addrs = (host, port)
             .to_socket_addrs()
             .with_context(|| format!("resolve {host}"))?;
         let mut last_err = None;
         for addr in addrs {
-            match TcpStream::connect_timeout(&addr, self.connect_timeout) {
+            let timeout = self.connect_timeout.min(remaining(deadline)?);
+            match TcpStream::connect_timeout(&addr, timeout) {
                 Ok(tcp) => {
-                    tcp.set_read_timeout(Some(self.io_timeout))?;
-                    tcp.set_write_timeout(Some(self.io_timeout))?;
                     tcp.set_nodelay(true)?;
                     return Ok(tcp);
                 }
@@ -324,22 +425,27 @@ impl Client {
         })
     }
 
-    fn tunnel(&self, proxy: &Url, host: &str, port: u16) -> Result<TcpStream> {
-        let mut tcp = self.dial(&proxy.host, proxy.port)?;
+    fn tunnel(&self, proxy: &Url, host: &str, port: u16, deadline: Instant) -> Result<TcpStream> {
+        let tcp = self.dial(&proxy.host, proxy.port, deadline)?;
+        let mut stream = Stream {
+            inner: Inner::Tcp(tcp),
+            deadline,
+            io_timeout: self.io_timeout,
+        };
         let authority = if host.contains(':') {
             format!("[{host}]:{port}")
         } else {
             format!("{host}:{port}")
         };
         write!(
-            tcp,
+            stream,
             "CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n"
         )?;
         // Read byte-wise: nothing may be consumed past the proxy's response head.
         let mut head = Vec::new();
         let mut byte = [0u8; 1];
         while !head.ends_with(b"\r\n\r\n") {
-            if head.len() > MAX_HEAD_BYTES || tcp.read(&mut byte)? == 0 {
+            if head.len() > MAX_HEAD_BYTES || stream.read(&mut byte)? == 0 {
                 bail!("proxy closed the connection during CONNECT");
             }
             head.push(byte[0]);
@@ -349,44 +455,109 @@ impl Client {
         if status != "200" {
             bail!(
                 "proxy refused CONNECT: {}",
-                status_line.lines().next().unwrap_or_default()
+                crate::util::sanitize(status_line.lines().next().unwrap_or_default())
             );
         }
+        let Inner::Tcp(tcp) = stream.inner else {
+            unreachable!()
+        };
         Ok(tcp)
     }
 }
 
-enum Stream {
+fn remaining(deadline: Instant) -> io::Result<Duration> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "HTTP request deadline exceeded",
+        ));
+    }
+    Ok(left)
+}
+
+enum Inner {
     Tcp(TcpStream),
     Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
     Unix(UnixStream),
 }
 
+/// A connection whose socket timeouts are re-armed before every read and write, so
+/// each operation waits at most `min(io_timeout, time left until deadline)`.
+struct Stream {
+    inner: Inner,
+    deadline: Instant,
+    io_timeout: Duration,
+}
+
+impl Stream {
+    fn arm(&self) -> io::Result<()> {
+        let timeout = Some(self.io_timeout.min(remaining(self.deadline)?));
+        match &self.inner {
+            Inner::Tcp(s) => {
+                s.set_read_timeout(timeout)?;
+                s.set_write_timeout(timeout)
+            }
+            Inner::Tls(s) => {
+                s.sock.set_read_timeout(timeout)?;
+                s.sock.set_write_timeout(timeout)
+            }
+            Inner::Unix(s) => {
+                s.set_read_timeout(timeout)?;
+                s.set_write_timeout(timeout)
+            }
+        }
+    }
+}
+
+impl Stream {
+    /// Socket timeouts surface as `EAGAIN`; name them.
+    fn timed_out(&self, e: io::Error) -> io::Error {
+        if matches!(
+            e.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        ) {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("no data from the server for {:?}", self.io_timeout),
+            )
+        } else {
+            e
+        }
+    }
+}
+
 impl Read for Stream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self {
-            Stream::Tcp(s) => s.read(buf),
-            Stream::Tls(s) => s.read(buf),
-            Stream::Unix(s) => s.read(buf),
-        }
+        self.arm()?;
+        let result = match &mut self.inner {
+            Inner::Tcp(s) => s.read(buf),
+            Inner::Tls(s) => s.read(buf),
+            Inner::Unix(s) => s.read(buf),
+        };
+        result.map_err(|e| self.timed_out(e))
     }
 }
 
 impl Write for Stream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self {
-            Stream::Tcp(s) => s.write(buf),
-            Stream::Tls(s) => s.write(buf),
-            Stream::Unix(s) => s.write(buf),
-        }
+        self.arm()?;
+        let result = match &mut self.inner {
+            Inner::Tcp(s) => s.write(buf),
+            Inner::Tls(s) => s.write(buf),
+            Inner::Unix(s) => s.write(buf),
+        };
+        result.map_err(|e| self.timed_out(e))
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        match self {
-            Stream::Tcp(s) => s.flush(),
-            Stream::Tls(s) => s.flush(),
-            Stream::Unix(s) => s.flush(),
-        }
+        self.arm()?;
+        let result = match &mut self.inner {
+            Inner::Tcp(s) => s.flush(),
+            Inner::Tls(s) => s.flush(),
+            Inner::Unix(s) => s.flush(),
+        };
+        result.map_err(|e| self.timed_out(e))
     }
 }
 
@@ -416,39 +587,57 @@ fn tls_config() -> Result<Arc<rustls::ClientConfig>> {
     Ok(CONFIG.get_or_init(|| Arc::new(config)).clone())
 }
 
-fn read_response(stream: &mut impl Read, method: &str, max_body: usize) -> Result<Response> {
-    let mut reader = BufReader::new(stream);
+/// Reads one line (terminator included) of at most `limit` bytes; empty at EOF.
+fn read_line(reader: &mut impl BufRead, limit: usize) -> Result<Vec<u8>> {
+    let mut line = Vec::new();
+    reader
+        .by_ref()
+        .take(limit as u64 + 1)
+        .read_until(b'\n', &mut line)?;
+    if line.len() > limit {
+        bail!("response line exceeds {limit} bytes");
+    }
+    Ok(line)
+}
+
+fn trim_line(line: &[u8]) -> String {
+    String::from_utf8_lossy(line)
+        .trim_end_matches(['\r', '\n'])
+        .to_owned()
+}
+
+struct Head {
+    status: u16,
+    reason: String,
+    headers: Vec<(String, String)>,
+}
+
+fn read_head(reader: &mut impl BufRead) -> Result<Head> {
     let mut head_bytes = 0usize;
-    let mut next_line = |reader: &mut BufReader<_>| -> Result<String> {
-        let mut line = Vec::new();
-        let n = reader.read_until(b'\n', &mut line)?;
-        head_bytes += n;
-        if n == 0 {
+    let mut next_line = |reader: &mut _| -> Result<String> {
+        let line = read_line(reader, MAX_LINE_BYTES)?;
+        if line.is_empty() {
             bail!("connection closed before the response head was complete");
         }
+        head_bytes += line.len();
         if head_bytes > MAX_HEAD_BYTES {
             bail!("response head exceeds {MAX_HEAD_BYTES} bytes");
         }
-        Ok(String::from_utf8_lossy(&line)
-            .trim_end_matches(['\r', '\n'])
-            .to_owned())
+        Ok(trim_line(&line))
     };
 
-    let status_line = next_line(&mut reader)?;
+    let status_line = next_line(reader)?;
     let mut parts = status_line.splitn(3, ' ');
     let version = parts.next().unwrap_or_default();
-    if !version.starts_with("HTTP/1.") {
-        bail!("not an HTTP/1.x response: {status_line:?}");
-    }
-    let status: u16 = parts
-        .next()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| anyhow!("bad status line {status_line:?}"))?;
-    let reason = parts.next().unwrap_or_default().to_owned();
+    let status = parts.next().and_then(|s| s.parse::<u16>().ok());
+    let (true, Some(status @ 100..=999)) = (version.starts_with("HTTP/1."), status) else {
+        bail!("not an HTTP/1.x response");
+    };
+    let reason = crate::util::sanitize(parts.next().unwrap_or_default());
 
     let mut headers = Vec::new();
     loop {
-        let line = next_line(&mut reader)?;
+        let line = next_line(reader)?;
         if line.is_empty() {
             break;
         }
@@ -456,27 +645,47 @@ fn read_response(stream: &mut impl Read, method: &str, max_body: usize) -> Resul
             headers.push((name.trim().to_owned(), value.trim().to_owned()));
         }
     }
-    let response_header = |name: &str| {
-        headers
+    Ok(Head {
+        status,
+        reason,
+        headers,
+    })
+}
+
+fn read_response(stream: &mut impl Read, method: &str, max_body: usize) -> Result<Response> {
+    let mut reader = BufReader::new(stream);
+    let mut interim = 0;
+    let head = loop {
+        let head = read_head(&mut reader)?;
+        // 1xx other than 101 precede the real response (RFC 9110 §15.2).
+        if (100..200).contains(&head.status) && head.status != 101 {
+            interim += 1;
+            if interim > MAX_INTERIM_RESPONSES {
+                bail!("too many interim (1xx) responses");
+            }
+            continue;
+        }
+        break head;
+    };
+    let header = |name: &str| {
+        head.headers
             .iter()
-            .find(|(k, _): &&(String, String)| k.eq_ignore_ascii_case(name))
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
             .map(|(_, v)| v.as_str())
     };
 
     let no_body = method.eq_ignore_ascii_case("HEAD")
-        || (100..200).contains(&status)
-        || status == 204
-        || status == 304;
+        || head.status == 101
+        || head.status == 204
+        || head.status == 304;
     let body = if no_body {
         Vec::new()
-    } else if response_header("transfer-encoding")
+    } else if header("transfer-encoding")
         .is_some_and(|v| v.to_ascii_lowercase().contains("chunked"))
     {
         read_chunked(&mut reader, max_body)?
-    } else if let Some(len) = response_header("content-length") {
-        let len: usize = len
-            .parse()
-            .with_context(|| format!("bad Content-Length {len:?}"))?;
+    } else if let Some(len) = header("content-length") {
+        let len: usize = len.parse().map_err(|_| anyhow!("bad Content-Length"))?;
         if len > max_body {
             bail!("response body of {len} bytes exceeds the {max_body} byte limit");
         }
@@ -487,45 +696,53 @@ fn read_response(stream: &mut impl Read, method: &str, max_body: usize) -> Resul
         read_to_close(&mut reader, max_body)?
     };
 
-    let body = match response_header("content-encoding") {
-        Some(encoding) => decode(body, encoding, max_body)?,
-        None => body,
+    let body = match header("content-encoding") {
+        Some(encoding) if !body.is_empty() => decode(body, encoding, max_body)?,
+        _ => body,
     };
     Ok(Response {
-        status,
-        reason,
-        headers,
+        status: head.status,
+        reason: head.reason,
+        headers: head.headers,
         body,
+        peer: None,
     })
 }
 
 fn read_chunked(reader: &mut impl BufRead, max_body: usize) -> Result<Vec<u8>> {
     let mut body = Vec::new();
     loop {
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        let size_str = line.trim().split(';').next().unwrap_or_default();
-        let size = usize::from_str_radix(size_str, 16)
-            .with_context(|| format!("bad chunk size {size_str:?}"))?;
+        let line = read_line(reader, MAX_LINE_BYTES)?;
+        if line.is_empty() {
+            bail!("connection closed inside a chunked body");
+        }
+        let line = trim_line(&line);
+        let size = line.split(';').next().unwrap_or_default().trim();
+        if size.is_empty() || size.len() > 16 || !size.bytes().all(|b| b.is_ascii_hexdigit()) {
+            bail!("bad chunk size");
+        }
+        let size = u64::from_str_radix(size, 16)?;
         if size == 0 {
-            // Trailer section ends with an empty line.
-            loop {
-                line.clear();
-                if reader.read_line(&mut line)? == 0 || line.trim().is_empty() {
+            // Trailer section ends with an empty line (or EOF from sloppy servers).
+            for _ in 0..=MAX_TRAILERS {
+                let line = read_line(reader, MAX_LINE_BYTES)?;
+                if line.is_empty() || trim_line(&line).is_empty() {
                     return Ok(body);
                 }
             }
+            bail!("more than {MAX_TRAILERS} trailer fields");
         }
-        if body.len() + size > max_body {
-            bail!("response body exceeds the {max_body} byte limit");
-        }
+        let end = usize::try_from(size)
+            .ok()
+            .and_then(|size| body.len().checked_add(size))
+            .filter(|&end| end <= max_body)
+            .ok_or_else(|| anyhow!("response body exceeds the {max_body} byte limit"))?;
         let start = body.len();
-        body.resize(start + size, 0);
+        body.resize(end, 0);
         reader
             .read_exact(&mut body[start..])
             .context("read chunk")?;
-        line.clear();
-        reader.read_line(&mut line)?;
+        read_line(reader, MAX_LINE_BYTES)?;
     }
 }
 
@@ -569,20 +786,21 @@ fn decode(mut body: Vec<u8>, encodings: &str, max_body: usize) -> Result<Vec<u8>
                     .map_err(|e| anyhow!("zstd: {e}"))?,
                 max_body,
             )?,
-            other => bail!("unsupported Content-Encoding {other:?}"),
+            _ => bail!("unsupported Content-Encoding"),
         };
     }
     Ok(body)
 }
 
-fn inflate(decoder: impl Read, max_body: usize) -> Result<Vec<u8>> {
+/// Reads a decompressor to the end, refusing output larger than `max` bytes.
+pub(crate) fn inflate(decoder: impl Read, max: usize) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     decoder
-        .take(max_body as u64 + 1)
+        .take(max as u64 + 1)
         .read_to_end(&mut out)
-        .context("decompress response body")?;
-    if out.len() > max_body {
-        bail!("decompressed body exceeds the {max_body} byte limit");
+        .context("decompress")?;
+    if out.len() > max {
+        bail!("decompressed data exceeds the {max} byte limit");
     }
     Ok(out)
 }
@@ -618,32 +836,70 @@ mod tests {
         assert!(Url::parse("ftp://h/").is_err());
         assert!(Url::parse("https://u:p@h/").is_err());
         assert!(Url::parse("https://пример.рф/").is_err());
+        assert!(Url::parse("https://a b/").is_err());
+        assert!(Url::parse("https://a\r\nX-Evil: 1/").is_err());
+        assert!(Url::parse("https://[::1]x/").is_err());
+    }
+
+    #[test]
+    fn url_errors_do_not_leak_the_input() {
+        for bad in [
+            "ftp://h/SECRET",
+            "https://h:SECRET/",
+            "https://SECRET\u{1}/",
+        ] {
+            let err = format!("{:#}", Url::parse(bad).unwrap_err());
+            assert!(!err.contains("SECRET"), "{err}");
+        }
     }
 
     #[test]
     fn joins_redirects() {
         let base = Url::parse("https://a.com/sub/abc?x").unwrap();
-        assert_eq!(base.join("/new").unwrap().to_string(), "https://a.com/new");
+        let join = |loc: &str| base.join(loc).unwrap().to_string();
+        assert_eq!(join("/new"), "https://a.com/new");
+        assert_eq!(join("def"), "https://a.com/sub/def");
+        assert_eq!(join("//b.com/z"), "https://b.com/z");
+        assert_eq!(join("http://c.com:81/"), "http://c.com:81/");
+        assert_eq!(join("HTTPS://D.com/q"), "https://d.com/q");
+        assert_eq!(join("?y=1"), "https://a.com/sub/abc?y=1");
+        assert_eq!(join(""), "https://a.com/sub/abc?x");
+        assert_eq!(join("../up"), "https://a.com/up");
+        assert_eq!(join("./same/../x?q=1#f"), "https://a.com/sub/x?q=1");
+        assert_eq!(join("/../../etc"), "https://a.com/etc");
+        // A relative reference whose query holds a URL is not an absolute URL.
         assert_eq!(
-            base.join("def").unwrap().to_string(),
-            "https://a.com/sub/def"
+            join("/go?to=https://evil.com/"),
+            "https://a.com/go?to=https://evil.com/"
         );
-        assert_eq!(
-            base.join("//b.com/z").unwrap().to_string(),
-            "https://b.com/z"
-        );
-        assert_eq!(
-            base.join("http://c.com:81/").unwrap().to_string(),
-            "http://c.com:81/"
-        );
+        assert!(base.join("javascript:alert(1)").is_err());
+    }
+
+    #[test]
+    fn swaps_hosts() {
+        let base = Url::parse("https://a.com/sub/abc?x").unwrap();
         assert_eq!(
             base.with_host("new.com").unwrap().to_string(),
             "https://new.com/sub/abc?x"
         );
+        assert_eq!(
+            base.with_host("new.com:8443").unwrap().to_string(),
+            "https://new.com:8443/sub/abc?x"
+        );
+        for bad in ["evil.com/x", "u@evil.com", "a.com?x", "", "a b"] {
+            assert!(base.with_host(bad).is_err(), "{bad}");
+        }
     }
 
     fn parse(raw: &[u8]) -> Response {
         read_response(&mut Cursor::new(raw.to_vec()), "GET", 1 << 20).unwrap()
+    }
+
+    fn parse_err(raw: &[u8], max: usize) -> String {
+        format!(
+            "{:#}",
+            read_response(&mut Cursor::new(raw.to_vec()), "GET", max).unwrap_err()
+        )
     }
 
     #[test]
@@ -661,6 +917,44 @@ mod tests {
     }
 
     #[test]
+    fn rejects_hostile_chunks() {
+        let chunked =
+            |rest: &str| format!("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{rest}");
+        // Would overflow `len + size` without checked arithmetic.
+        let e = parse_err(chunked("1\r\na\r\nffffffffffffffff\r\n").as_bytes(), 100);
+        assert!(e.contains("limit"), "{e}");
+        assert!(parse_err(chunked("10000000000000000\r\n").as_bytes(), 100).contains("chunk size"));
+        assert!(parse_err(chunked("-1\r\n").as_bytes(), 100).contains("chunk size"));
+        assert!(parse_err(chunked("5\r\nhel").as_bytes(), 100).contains("chunk"));
+        let trailers = "X: 1\r\n".repeat(MAX_TRAILERS + 1);
+        assert!(
+            parse_err(chunked(&format!("0\r\n{trailers}\r\n")).as_bytes(), 100).contains("trailer")
+        );
+    }
+
+    #[test]
+    fn bounds_lines() {
+        let long = format!(
+            "HTTP/1.1 200 OK\r\nX: {}\r\n\r\n",
+            "a".repeat(MAX_LINE_BYTES)
+        );
+        assert!(parse_err(long.as_bytes(), 100).contains("line"));
+        let many = format!(
+            "HTTP/1.1 200 OK\r\n{}\r\n",
+            "X: aaaaaaaaaaaaaaaa\r\n".repeat(4000)
+        );
+        assert!(parse_err(many.as_bytes(), 100).contains("head"));
+    }
+
+    #[test]
+    fn skips_interim_responses() {
+        let r = parse(b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 103 Early Hints\r\nLink: x\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+        assert_eq!((r.status, &r.body[..]), (200, &b"ok"[..]));
+        let flood = "HTTP/1.1 100 Continue\r\n\r\n".repeat(MAX_INTERIM_RESPONSES + 1);
+        assert!(parse_err(flood.as_bytes(), 100).contains("interim"));
+    }
+
+    #[test]
     fn reads_until_close_and_head() {
         let r = parse(b"HTTP/1.0 404 Not Found\r\n\r\nnope");
         assert_eq!(
@@ -673,6 +967,14 @@ mod tests {
             100,
         )
         .unwrap();
+        assert!(r.body.is_empty());
+        let r = parse(b"HTTP/1.1 204 No Content\r\nContent-Encoding: gzip\r\n\r\n");
+        assert!(r.body.is_empty());
+    }
+
+    #[test]
+    fn empty_encoded_body_is_not_decoded() {
+        let r = parse(b"HTTP/1.1 200 OK\r\nContent-Encoding: br\r\nContent-Length: 0\r\n\r\n");
         assert!(r.body.is_empty());
     }
 
@@ -709,6 +1011,38 @@ mod tests {
     #[test]
     fn rejects_garbage() {
         assert!(read_response(&mut Cursor::new(b"SSH-2.0\r\n\r\n".to_vec()), "GET", 10).is_err());
+        assert!(
+            read_response(
+                &mut Cursor::new(b"HTTP/1.1 20 OK\r\n\r\n".to_vec()),
+                "GET",
+                10
+            )
+            .is_err()
+        );
         assert!(read_response(&mut Cursor::new(Vec::new()), "GET", 10).is_err());
+    }
+
+    #[test]
+    fn total_deadline_stops_a_trickling_server() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let writer = std::thread::spawn(move || {
+            let _ = server.write_all(b"HTTP/1.1 200 OK\r\n");
+            for _ in 0..100 {
+                if server.write_all(b"X: y\r\n").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let mut stream = Stream {
+            inner: Inner::Unix(client),
+            deadline: Instant::now() + Duration::from_millis(200),
+            io_timeout: Duration::from_secs(5),
+        };
+        let started = Instant::now();
+        assert!(read_response(&mut stream, "GET", 1024).is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(stream);
+        writer.join().unwrap();
     }
 }

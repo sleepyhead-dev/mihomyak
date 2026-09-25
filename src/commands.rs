@@ -10,7 +10,7 @@ use crate::cli::{Cli, Command, CoreCommand};
 use crate::config::Config;
 use crate::subscription::{self, ProviderInfo};
 use crate::updater::{self, Outcome, Updater};
-use crate::util::{fmt_bytes, fmt_date, fmt_duration, fmt_timestamp, now_unix};
+use crate::util::{fmt_bytes, fmt_date, fmt_duration, fmt_timestamp, now_unix, sanitize};
 
 pub fn run(cli: Cli) -> Result<ExitCode> {
     let mut config = Config::load(cli.config.as_deref(), cli.data_dir.as_deref())?;
@@ -67,34 +67,22 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
     }
 }
 
-/// API client for the configured controller (secret from config or data dir).
-pub fn api(config: &Config) -> Result<Api> {
-    let secret = match &config.core.secret {
-        Some(secret) => secret.clone(),
-        None => crate::store::Store::open(&config.data_dir)?.secret()?,
-    };
-    Api::new(&config.core.controller, &secret)
+fn api(config: &Config) -> Result<Api> {
+    Api::from_config(config)
 }
 
 fn update(config: Config) -> Result<ExitCode> {
     let updater = Updater::new(config)?;
-    if let Some(pid) = updater.store.supervisor_pid() {
-        let before = updater.store.load_meta().map_or(0, |m| m.checked_at);
-        // SAFETY: kill(2) with a pid read from our own pid file, verified alive.
-        if unsafe { libc::kill(pid, libc::SIGHUP) } != 0 {
-            bail!(
-                "cannot signal the supervisor (pid {pid}): {}",
-                std::io::Error::last_os_error()
-            );
-        }
+    let before = updater.store.load_meta().map_or(0, |m| m.update_seq);
+    if let Some(pid) = updater.store.signal_supervisor(libc::SIGHUP)? {
         println!("asked the supervisor (pid {pid}) to update…");
-        let deadline = Instant::now() + Duration::from_secs(120);
+        let deadline = Instant::now() + Duration::from_secs(180);
         while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(300));
             let Some(meta) = updater.store.load_meta() else {
                 continue;
             };
-            if meta.checked_at > before {
+            if meta.update_seq != before {
                 return Ok(match meta.last_error {
                     None => {
                         println!("updated ({} proxies)", meta.proxies);
@@ -107,7 +95,7 @@ fn update(config: Config) -> Result<ExitCode> {
                 });
             }
         }
-        bail!("the supervisor did not report back within 2 minutes; check its logs");
+        bail!("the supervisor did not report back within 3 minutes; check its logs");
     }
     match updater.update()? {
         Outcome::Applied {
@@ -121,10 +109,18 @@ fn update(config: Config) -> Result<ExitCode> {
                 updater::describe(&info, proxies)
             );
             // A core started outside the supervisor can still pick it up.
-            if let Ok(api) = Api::new(&updater.config.core.controller, &updater.secret)
-                && api.reload(&updater.store.mihomo_config()).is_ok()
+            if changed
+                && let Ok(api) = Api::new(&updater.config.core.controller, &updater.secret)
+                && api.version().is_ok()
             {
-                println!("mihomo reloaded");
+                match api.reload(&updater.store.mihomo_config()) {
+                    Ok(()) => println!("mihomo reloaded"),
+                    Err(e) => {
+                        updater.rollback(&format!("{e:#}"))?;
+                        println!("mihomo rejected the new config, previous one restored: {e:#}");
+                        return Ok(ExitCode::FAILURE);
+                    }
+                }
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -151,10 +147,15 @@ fn fetch(config: Config, show_body: bool) -> Result<ExitCode> {
     for (name, value) in &fetch.request_headers {
         println!("> {name}: {value}");
     }
+    // Everything below comes from the server: strip terminal control sequences.
     let response = &fetch.response;
-    println!("\n< HTTP/1.1 {} {}", response.status, response.reason);
+    println!(
+        "\n< HTTP/1.1 {} {}",
+        response.status,
+        sanitize(&response.reason)
+    );
     for (name, value) in &response.headers {
-        println!("< {name}: {value}");
+        println!("< {}: {}", sanitize(name), sanitize(value));
     }
     println!("< ({} bytes)", response.body.len());
 
@@ -167,10 +168,15 @@ fn fetch(config: Config, show_body: bool) -> Result<ExitCode> {
             content.endpoints.len()
         );
         for e in content.endpoints.iter().take(15) {
-            println!("              - {} ({}:{})", e.name, e.server, e.port);
+            println!(
+                "              - {} ({}:{})",
+                sanitize(&e.name),
+                sanitize(&e.server),
+                e.port
+            );
         }
         for note in &content.notes {
-            println!("              ! {note}");
+            println!("              ! {}", sanitize(note));
         }
         if content.endpoints.len() > 15 {
             println!("              … {} more", content.endpoints.len() - 15);
@@ -182,12 +188,16 @@ fn fetch(config: Config, show_body: bool) -> Result<ExitCode> {
     match &analysis.problem {
         None => println!("verdict:      OK, usable"),
         Some(p) => println!(
-            "verdict:      {} ({p})",
-            if usable { "STUB, accepted" } else { "REJECTED" }
+            "verdict:      {} ({})",
+            if usable { "STUB, accepted" } else { "REJECTED" },
+            sanitize(p.message())
         ),
     }
     if show_body {
-        println!("\n{}", String::from_utf8_lossy(&response.body));
+        println!();
+        for line in String::from_utf8_lossy(&response.body).lines() {
+            println!("{}", sanitize(line));
+        }
     }
     Ok(if usable {
         ExitCode::SUCCESS
@@ -251,58 +261,46 @@ fn check(config: Config) -> Result<ExitCode> {
         }
     };
     for warning in &built.warnings {
-        println!("warning:      {warning}");
+        println!("warning:      {}", sanitize(warning));
     }
     let bin = crate::core::resolve_bin(cfg, &updater.store);
-    let home = updater.store.mihomo_home();
-    let candidate = updater.store.root().join("check.yaml");
-    crate::util::write_atomic(&candidate, built.config_yaml.as_bytes())?;
-    let output = std::process::Command::new(&bin)
-        .arg("-t")
-        .arg("-d")
-        .arg(&home)
-        .arg("-f")
-        .arg(&candidate)
-        .output();
-    let _ = std::fs::remove_file(&candidate);
-    match output {
-        Ok(out) if out.status.success() => {
+    match updater.check_config(&built) {
+        Ok(None) => {
             println!("mihomo -t:    ok");
             Ok(ExitCode::SUCCESS)
         }
-        Ok(out) => {
+        Ok(Some(log)) => {
             println!("mihomo -t:    FAILED");
-            print!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            );
+            for line in log.lines() {
+                println!("{}", sanitize(line));
+            }
             Ok(ExitCode::FAILURE)
         }
         Err(e) => {
-            println!("mihomo -t:    skipped ({}: {e})", bin.display());
+            println!("mihomo -t:    skipped ({}: {e:#})", bin.display());
             Ok(ExitCode::SUCCESS)
         }
     }
 }
 
 fn print_provider(info: &ProviderInfo) {
-    let row = |label: &str, value: &str| println!("{label:<13} {value}");
+    let row = |label: &str, value: &str| println!("{label:<13} {}", sanitize(value));
     if let Some(title) = &info.title {
         row("title:", title);
     }
     if let Some(u) = &info.usage {
-        let total = if u.total == 0 {
-            "unlimited".into()
-        } else {
-            fmt_bytes(u.total)
-        };
-        row("traffic:", &format!("{} of {total}", fmt_bytes(u.used())));
+        row(
+            "traffic:",
+            &format!("{} of {}", fmt_bytes(u.used()), u.total_display()),
+        );
         if u.expire > 0 {
-            let left = u.expire.saturating_sub(now_unix()) / 86_400;
             row(
                 "expires:",
-                &format!("{} ({left} days left)", fmt_date(u.expire)),
+                &format!(
+                    "{} ({} days left)",
+                    fmt_date(u.expire),
+                    u.days_left(now_unix())
+                ),
             );
         } else {
             row("expires:", "never");
@@ -396,7 +394,7 @@ fn status(config: Config) -> Result<ExitCode> {
                 println!(
                     "{:<13} {} at {}",
                     "last error:",
-                    error,
+                    sanitize(error),
                     fmt_timestamp(meta.checked_at)
                 );
             }
@@ -423,15 +421,11 @@ fn status(config: Config) -> Result<ExitCode> {
                 );
             }
             if let Ok(snapshot) = api.snapshot() {
-                for g in snapshot
-                    .groups
-                    .iter()
-                    .filter(|g| g.selectable() && g.name != "GLOBAL")
-                {
+                for g in snapshot.groups.iter().filter(|g| g.is_user_selector()) {
                     println!(
                         "{:<13} {}",
-                        format!("{}:", g.name),
-                        g.now.as_deref().unwrap_or("-")
+                        format!("{}:", sanitize(&g.name)),
+                        sanitize(g.now.as_deref().unwrap_or("-"))
                     );
                 }
             }
@@ -485,9 +479,9 @@ fn proxies(config: &Config, group: Option<&str>) -> Result<ExitCode> {
         for g in &snapshot.groups {
             println!(
                 "{:<24} {:<11} → {} ({} members)",
-                g.name,
+                sanitize(&g.name),
                 g.kind,
-                g.now.as_deref().unwrap_or("-"),
+                sanitize(g.now.as_deref().unwrap_or("-")),
                 g.members.len()
             );
         }
@@ -499,7 +493,7 @@ fn proxies(config: &Config, group: Option<&str>) -> Result<ExitCode> {
         .iter()
         .find(|g| g.name == name)
         .context("group vanished")?;
-    println!("{} [{}]", g.name, g.kind);
+    println!("{} [{}]", sanitize(&g.name), g.kind);
     for member in &g.members {
         let mark = if g.now.as_deref() == Some(member) {
             "*"
@@ -508,7 +502,8 @@ fn proxies(config: &Config, group: Option<&str>) -> Result<ExitCode> {
         };
         let kind = snapshot.kinds.get(member).map_or("", String::as_str);
         println!(
-            " {mark} {member:<32} {kind:<11} {}",
+            " {mark} {:<32} {kind:<11} {}",
+            sanitize(member),
             fmt_delay(snapshot.delays.get(member))
         );
     }
@@ -532,7 +527,7 @@ fn select(config: &Config, group: &str, proxy: &str) -> Result<ExitCode> {
     }
     let proxy = resolve_name(g.members.iter(), proxy)?;
     api.select(&group, &proxy)?;
-    println!("{group} → {proxy}");
+    println!("{} → {}", sanitize(&group), sanitize(&proxy));
     Ok(ExitCode::SUCCESS)
 }
 
@@ -547,17 +542,21 @@ fn test(config: &Config, group: Option<&str>, url: &str, timeout: u32) -> Result
         None => snapshot
             .groups
             .iter()
-            .filter(|g| g.selectable() && g.name != "GLOBAL")
+            .filter(|g| g.is_user_selector())
             .collect(),
     };
     for g in groups {
-        println!("{}:", g.name);
+        println!("{}:", sanitize(&g.name));
         let delays = api.group_delay(&g.name, url, timeout)?;
         let mut rows: Vec<(&String, Option<&u32>)> =
             g.members.iter().map(|m| (m, delays.get(m))).collect();
         rows.sort_by_key(|(_, d)| d.map_or(u32::MAX, |d| *d));
         for (member, delay) in rows {
-            println!("  {member:<32} {}", fmt_delay(delay.or(Some(&0))));
+            println!(
+                "  {:<32} {}",
+                sanitize(member),
+                fmt_delay(delay.or(Some(&0)))
+            );
         }
     }
     Ok(ExitCode::SUCCESS)

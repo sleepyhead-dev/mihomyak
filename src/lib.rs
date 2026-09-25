@@ -1,5 +1,5 @@
 //! mihomyak: a lightweight mihomo supervisor for CIS-style subscription panels
-//! (Remnawave, Marzban, PasarGuard, 3x-ui) that emulates FlClashX / Koala Clash.
+//! (Remnawave, Marzban, PasarGuard, 3x-ui) that emulates FlClashX / Koala Clash / Happ.
 //!
 //! Architecture overview: `docs/ARCHITECTURE.md`.
 

@@ -16,14 +16,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
-use crate::api::{Api, Snapshot};
+use crate::api::{Api, DELAY_TIMEOUT_MS, Snapshot};
 use crate::config::Config;
 use crate::store::Store;
 use crate::subscription::ProviderInfo;
-use crate::util::{fmt_bytes, fmt_date, now_unix};
+use crate::util::{fmt_bytes, fmt_date, now_unix, sanitize};
 
 const REFRESH_EVERY: Duration = Duration::from_secs(3);
-const TEST_URL: &str = "https://www.gstatic.com/generate_204";
 
 enum Msg {
     Snapshot(Result<Snapshot, String>),
@@ -57,7 +56,7 @@ struct App {
 }
 
 pub fn run(config: &Config) -> Result<()> {
-    let api = crate::commands::api(config)?;
+    let api = Api::from_config(config)?;
     let version = api
         .version()
         .map_err(|e| anyhow::anyhow!("mihomo API unreachable: {e:#}"))?;
@@ -138,9 +137,9 @@ impl App {
             }
             Msg::Mode(mode) => self.mode = mode,
             Msg::Delays(delays) => {
-                let ok = delays.len();
+                let ok = delays.values().filter(|&&d| d > 0).count();
+                self.status = format!("delay test done: {ok} of {} reachable", delays.len());
                 self.snapshot.delays.extend(delays);
-                self.status = format!("delay test done: {ok} reachable");
             }
             Msg::Status(s) => {
                 self.status = s;
@@ -206,7 +205,11 @@ impl App {
             return;
         };
         if !group.selectable() {
-            self.status = format!("{} is {}: selection is automatic", group.name, group.kind);
+            self.status = format!(
+                "{} is {}: selection is automatic",
+                sanitize(&group.name),
+                group.kind
+            );
             return;
         }
         let Some(proxy) = self
@@ -219,21 +222,31 @@ impl App {
         };
         self.spawn(move |api| {
             Msg::Status(match api.select(&group.name, &proxy) {
-                Ok(()) => format!("{} → {proxy}", group.name),
+                Ok(()) => format!("{} → {}", sanitize(&group.name), sanitize(&proxy)),
                 Err(e) => format!("select failed: {e:#}"),
             })
         });
     }
 
     fn test(&mut self) {
-        let Some(group) = self.group().map(|g| g.name.clone()) else {
+        let Some((group, members)) = self.group().map(|g| (g.name.clone(), g.members.clone()))
+        else {
             return;
         };
-        self.status = format!("testing {group}…");
-        self.spawn(move |api| match api.group_delay(&group, TEST_URL, 5000) {
-            Ok(delays) => Msg::Delays(delays),
-            Err(e) => Msg::Status(format!("delay test failed: {e:#}")),
-        });
+        self.status = format!("testing {}…", sanitize(&group));
+        let url = crate::profile::HEALTH_CHECK_URL;
+        self.spawn(
+            move |api| match api.group_delay(&group, url, DELAY_TIMEOUT_MS) {
+                // Members missing from the answer failed: show them as timeouts (0).
+                Ok(mut delays) => {
+                    for member in members {
+                        delays.entry(member).or_insert(0);
+                    }
+                    Msg::Delays(delays)
+                }
+                Err(e) => Msg::Status(format!("delay test failed: {e:#}")),
+            },
+        );
     }
 
     fn cycle_mode(&mut self) {
@@ -254,12 +267,10 @@ impl App {
     }
 
     fn update(&mut self) {
-        self.status = match self.store.supervisor_pid() {
-            // SAFETY: kill(2) on a live pid read from our own pid file.
-            Some(pid) if unsafe { libc::kill(pid, libc::SIGHUP) } == 0 => {
-                "subscription update requested (see supervisor logs)".into()
-            }
-            _ => "supervisor not running: use `mihomyak update`".into(),
+        self.status = match self.store.signal_supervisor(libc::SIGHUP) {
+            Ok(Some(_)) => "subscription update requested (see supervisor logs)".into(),
+            Ok(None) => "supervisor not running: use `mihomyak update`".into(),
+            Err(e) => format!("{e:#}"),
         };
     }
 
@@ -290,8 +301,9 @@ impl App {
             .iter()
             .map(|g| {
                 ListItem::new(Line::from(vec![
-                    Span::raw(g.name.clone()),
-                    Span::raw(format!("  → {}", g.now.as_deref().unwrap_or("-"))).dark_gray(),
+                    Span::raw(sanitize(&g.name)),
+                    Span::raw(format!("  → {}", sanitize(g.now.as_deref().unwrap_or("-"))))
+                        .dark_gray(),
                 ]))
             })
             .collect();
@@ -309,7 +321,7 @@ impl App {
 
         let (title, members) = match self.group() {
             Some(g) => (
-                format!(" {} [{}] ", g.name, g.kind),
+                format!(" {} [{}] ", sanitize(&g.name), g.kind),
                 g.members
                     .iter()
                     .map(|m| {
@@ -317,7 +329,7 @@ impl App {
                         let kind = self.snapshot.kinds.get(m).cloned().unwrap_or_default();
                         ListItem::new(Line::from(vec![
                             Span::raw(if current { "● " } else { "  " }).green(),
-                            Span::raw(m.clone()),
+                            Span::raw(sanitize(m)),
                             Span::raw(format!("  {kind}  ")).dark_gray(),
                             delay_span(self.snapshot.delays.get(m)),
                         ]))
@@ -344,19 +356,21 @@ impl App {
         let title = self
             .info
             .as_ref()
-            .and_then(|i| i.title.clone())
-            .unwrap_or_else(|| "subscription".into());
+            .and_then(|i| i.title.as_deref())
+            .map_or_else(|| "subscription".into(), sanitize);
         let mut usage = Vec::new();
         if let Some(u) = self.info.as_ref().and_then(|i| i.usage.as_ref()) {
-            let total = if u.total == 0 {
-                "∞".into()
-            } else {
-                fmt_bytes(u.total)
-            };
-            usage.push(format!("traffic {} / {total}", fmt_bytes(u.used())));
+            usage.push(format!(
+                "traffic {} / {}",
+                fmt_bytes(u.used()),
+                u.total_display()
+            ));
             if u.expire > 0 {
-                let days = u.expire.saturating_sub(now_unix()) / 86_400;
-                usage.push(format!("expires {} ({days}d)", fmt_date(u.expire)));
+                usage.push(format!(
+                    "expires {} ({}d)",
+                    fmt_date(u.expire),
+                    u.days_left(now_unix())
+                ));
             }
         }
         Paragraph::new(vec![

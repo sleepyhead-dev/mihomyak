@@ -19,6 +19,20 @@ impl Usage {
     pub fn used(&self) -> u64 {
         self.upload.saturating_add(self.download)
     }
+
+    /// `100.00 GiB`, or `∞` for unlimited plans.
+    pub fn total_display(&self) -> String {
+        if self.total == 0 {
+            "∞".into()
+        } else {
+            crate::util::fmt_bytes(self.total)
+        }
+    }
+
+    /// Whole days until `expire` (0 once expired; meaningless when `expire == 0`).
+    pub fn days_left(&self, now: u64) -> u64 {
+        self.expire.saturating_sub(now) / 86_400
+    }
 }
 
 /// Remnawave's device-limit signals.
@@ -62,15 +76,17 @@ impl ProviderInfo {
         Self {
             title: get("profile-title")
                 .map(decode_text)
-                .or_else(|| get("content-disposition").and_then(disposition_filename)),
+                .or_else(|| get("content-disposition").and_then(disposition_filename))
+                .map(|t| crate::util::sanitize(&t)),
             usage: get("subscription-userinfo").map(parse_userinfo),
+            // Hours; absurd values would overflow the schedule, so cap at a year.
             update_interval: get("profile-update-interval")
                 .and_then(|v| v.parse::<u64>().ok())
                 .filter(|&h| h > 0)
-                .map(|h| Duration::from_secs(h * 3600)),
-            support_url: get("support-url").map(str::to_owned),
-            web_page_url: get("profile-web-page-url").map(str::to_owned),
-            announce: get("announce").map(decode_text),
+                .map(|h| Duration::from_secs(h.min(8760) * 3600)),
+            support_url: get("support-url").map(crate::util::sanitize),
+            web_page_url: get("profile-web-page-url").map(crate::util::sanitize),
+            announce: get("announce").map(|a| crate::util::sanitize(&decode_text(a))),
             refill_date: get("subscription-refill-date").and_then(|v| v.parse().ok()),
             hwid: HwidFlags {
                 active: flag("x-hwid-active"),
@@ -202,6 +218,10 @@ mod tests {
         assert_eq!(info.announce.as_deref(), Some("Привет"));
         assert_eq!(info.update_interval, Some(Duration::from_secs(12 * 3600)));
         assert!(info.hwid.active && !info.hwid.max_devices_reached);
+
+        let huge =
+            ProviderInfo::from_headers(&headers(&[("profile-update-interval", "99999999999999")]));
+        assert_eq!(huge.update_interval, Some(Duration::from_secs(8760 * 3600)));
         assert_eq!(info.refill_date, Some(1_767_225_600));
     }
 

@@ -43,7 +43,6 @@ const XHTTP_FIELDS: &[(&str, &str, bool)] = &[
     ("uplinkChunkSize", "uplink-chunk-size", false),
     ("scMaxEachPostBytes", "sc-max-each-post-bytes", false),
     ("scMinPostsIntervalMs", "sc-min-posts-interval-ms", false),
-    ("scStreamUpServerSecs", "sc-stream-up-server-secs", true),
 ];
 
 const XMUX_FIELDS: &[(&str, &str, bool)] = &[
@@ -77,7 +76,11 @@ pub fn convert(json: &Json) -> Result<Converted, String> {
         proxies: Vec::new(),
         warnings: Vec::new(),
     };
-    let mut names = std::collections::HashSet::new();
+    // Proxy names must not shadow mihomo's built-in policies.
+    let mut names: std::collections::HashSet<String> = crate::profile::BUILTIN_NAMES
+        .iter()
+        .map(|n| n.to_string())
+        .collect();
     let mut push = |out: &mut Converted, outbound: &Json, name: &str| {
         let name = unique_name(&mut names, name);
         match convert_outbound(outbound, &name, &mut out.warnings) {
@@ -243,6 +246,12 @@ fn convert_outbound(
             );
         }
         "shadowsocks" => {
+            let network = stream["network"].as_str().unwrap_or("tcp");
+            if !matches!(network, "tcp" | "raw") {
+                return Err(format!(
+                    "shadowsocks over {network} is not supported by mihomo"
+                ));
+            }
             set(
                 &mut node,
                 "cipher",
@@ -280,7 +289,7 @@ fn convert_outbound(
         _ => unreachable!(),
     }
 
-    apply_security(&mut node, kind, stream);
+    apply_security(&mut node, kind, stream, name, warnings)?;
     apply_transport(&mut node, stream)?;
 
     if stream["sockopt"]["dialerProxy"].is_string() {
@@ -303,9 +312,16 @@ fn fingerprint(raw: Option<&str>) -> &'static str {
         .unwrap_or("chrome")
 }
 
-fn apply_security(node: &mut Mapping, kind: &str, stream: &Json) {
+fn apply_security(
+    node: &mut Mapping,
+    kind: &str,
+    stream: &Json,
+    name: &str,
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
     let security = stream["security"].as_str().unwrap_or("none");
-    let sni_key = if kind == "trojan" {
+    // mihomo: vless/vmess take `servername`, trojan and http take `sni`.
+    let sni_key = if matches!(kind, "trojan" | "http") {
         "sni"
     } else {
         "servername"
@@ -315,7 +331,7 @@ fn apply_security(node: &mut Mapping, kind: &str, stream: &Json) {
         "reality" => &stream["realitySettings"],
         _ => {
             set(node, "client-fingerprint", "chrome");
-            return;
+            return Ok(());
         }
     };
     set(node, "tls", true);
@@ -331,16 +347,37 @@ fn apply_security(node: &mut Mapping, kind: &str, stream: &Json) {
         if let Some(alpn) = alpn_list(&opts["alpn"]) {
             set(node, "alpn", alpn);
         }
-        if opts["allowInsecure"].as_bool() == Some(true) || opts["pinnedPeerCertSha256"].is_string()
-        {
+        if opts["allowInsecure"].as_bool() == Some(true) {
             set(node, "skip-cert-verify", true);
+        }
+        // Certificate pinning maps to mihomo's `fingerprint` (sha256 of the
+        // certificate); it tightens verification instead of disabling it.
+        if let Some(pins) = json_str(&opts["pinnedPeerCertSha256"]) {
+            let mut valid = pins
+                .split([',', '~', ' '])
+                .map(|p| p.trim().replace(':', "").to_ascii_lowercase())
+                .filter(|p| p.len() == 64 && p.bytes().all(|b| b.is_ascii_hexdigit()));
+            match valid.next() {
+                Some(pin) => {
+                    set(node, "fingerprint", pin);
+                    if valid.next().is_some() {
+                        warnings.push(format!(
+                            "{name}: several pinned certificates, only the first is used"
+                        ));
+                    }
+                }
+                None => warnings.push(format!(
+                    "{name}: pinnedPeerCertSha256 is not a hex SHA-256, pin ignored"
+                )),
+            }
         }
     } else {
         let mut reality = Mapping::new();
         // Xray ≥ 25.x renamed publicKey to password on the client side.
-        if let Some(pk) = json_str(&opts["publicKey"]).or_else(|| json_str(&opts["password"])) {
-            set(&mut reality, "public-key", pk);
-        }
+        let pk = json_str(&opts["publicKey"])
+            .or_else(|| json_str(&opts["password"]))
+            .ok_or("reality without publicKey")?;
+        set(&mut reality, "public-key", pk);
         set(
             &mut reality,
             "short-id",
@@ -348,6 +385,7 @@ fn apply_security(node: &mut Mapping, kind: &str, stream: &Json) {
         );
         set(node, "reality-opts", Value::Mapping(reality));
     }
+    Ok(())
 }
 
 fn alpn_list(json: &Json) -> Option<Value> {
@@ -411,17 +449,14 @@ fn apply_transport(node: &mut Mapping, stream: &Json) -> Result<(), String> {
             };
             set(node, "network", "ws");
             let mut opts = Mapping::new();
-            let mut path = ws["path"].as_str().unwrap_or_default().to_owned();
-            if let Some((p, ed)) = path.clone().split_once("?ed=") {
-                if let Ok(early) = ed.split('/').next().unwrap_or_default().parse::<u64>() {
-                    set(&mut opts, "max-early-data", early);
-                    set(
-                        &mut opts,
-                        "early-data-header-name",
-                        "Sec-WebSocket-Protocol",
-                    );
-                }
-                path = p.to_owned();
+            let (path, early) = split_early_data(ws["path"].as_str().unwrap_or_default());
+            if let Some(early) = early {
+                set(&mut opts, "max-early-data", early);
+                set(
+                    &mut opts,
+                    "early-data-header-name",
+                    "Sec-WebSocket-Protocol",
+                );
             }
             if !path.is_empty() {
                 set(&mut opts, "path", path);
@@ -482,6 +517,33 @@ fn apply_transport(node: &mut Mapping, stream: &Json) -> Result<(), String> {
     Ok(())
 }
 
+/// Xray's `ed=N` query parameter (anywhere in the query) is WebSocket early data;
+/// mihomo takes it as `max-early-data`. Returns the path without it.
+fn split_early_data(path: &str) -> (String, Option<u64>) {
+    let Some((base, query)) = path.split_once('?') else {
+        return (path.to_owned(), None);
+    };
+    let mut early = None;
+    let rest: Vec<&str> = query
+        .split('&')
+        .filter(
+            |param| match param.strip_prefix("ed=").map(str::parse::<u64>) {
+                Some(Ok(n)) => {
+                    early = Some(n);
+                    false
+                }
+                _ => true,
+            },
+        )
+        .collect();
+    let path = if rest.is_empty() {
+        base.to_owned()
+    } else {
+        format!("{base}?{}", rest.join("&"))
+    };
+    (path, early)
+}
+
 fn copy_fields(src: &Json, dst: &mut Mapping, fields: &[(&str, &str, bool)]) {
     for (from, to, stringify) in fields {
         let value = &src[*from];
@@ -536,7 +598,7 @@ fn xhttp_opts(xhttp: &Json) -> Mapping {
                 set(&mut download, "servername", sni);
             }
             if let Some(fp) = json_str(&tls["fingerprint"]) {
-                set(&mut download, "client-fingerprint", fp);
+                set(&mut download, "client-fingerprint", fingerprint(Some(fp)));
             }
             if let Some(alpn) = alpn_list(&tls["alpn"]) {
                 set(&mut download, "alpn", alpn);
@@ -631,6 +693,63 @@ mod tests {
                 ]
             }
         ])
+    }
+
+    #[test]
+    fn early_data_anywhere_in_the_query() {
+        assert_eq!(split_early_data("/ws?ed=2048"), ("/ws".into(), Some(2048)));
+        assert_eq!(
+            split_early_data("/ws?a=1&ed=2560&b=2"),
+            ("/ws?a=1&b=2".into(), Some(2560))
+        );
+        assert_eq!(split_early_data("/ws?ed=x"), ("/ws?ed=x".into(), None));
+        assert_eq!(split_early_data("/plain"), ("/plain".into(), None));
+    }
+
+    #[test]
+    fn security_edge_cases() {
+        let outbound = |stream: Json| {
+            json!({"tag": "proxy", "protocol": "vless",
+                   "settings": {"vnext": [{"address": "a.example", "port": 443,
+                                           "users": [{"id": "u"}]}]},
+                   "streamSettings": stream})
+        };
+        let mut warnings = Vec::new();
+        let pin = "AB:".repeat(31) + "AB";
+        let node = convert_outbound(
+            &outbound(json!({"security": "tls",
+                "tlsSettings": {"serverName": "a.example", "pinnedPeerCertSha256": pin}})),
+            "n",
+            &mut warnings,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(node["fingerprint"].as_str(), Some("ab".repeat(32).as_str()));
+        assert!(
+            node.get("skip-cert-verify").is_none(),
+            "a pin never disables verification"
+        );
+
+        let err = convert_outbound(
+            &outbound(json!({"security": "reality", "realitySettings": {"shortId": "ab"}})),
+            "n",
+            &mut warnings,
+        )
+        .unwrap_err();
+        assert!(err.contains("publicKey"));
+
+        let ss = json!({"protocol": "shadowsocks",
+            "settings": {"servers": [{"address": "s", "port": 1, "method": "aes-128-gcm", "password": "p"}]},
+            "streamSettings": {"network": "ws"}});
+        assert!(convert_outbound(&ss, "n", &mut warnings).is_err());
+    }
+
+    #[test]
+    fn remarks_never_shadow_builtin_policies() {
+        let doc = json!([{"remarks": "DIRECT", "outbounds": [{"tag": "proxy", "protocol": "trojan",
+            "settings": {"servers": [{"address": "t.example", "port": 443, "password": "p"}]}}]}]);
+        let converted = convert(&doc).unwrap();
+        assert_eq!(converted.proxies[0]["name"].as_str(), Some("DIRECT 2"));
     }
 
     #[test]

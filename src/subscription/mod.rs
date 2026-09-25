@@ -5,15 +5,17 @@ pub mod headers;
 pub mod stub;
 pub mod xray;
 
+use std::net::IpAddr;
+
 use anyhow::{Context, Result, bail};
 
 pub use body::{Content, Format};
 pub use headers::ProviderInfo;
 
 use crate::emulation::Emulation;
-use crate::http::{Client, Endpoint, Request, Response, Url};
+use crate::http::{Client, Endpoint, Request, Response, Scheme, Url};
 
-/// Both emulated clients follow redirects; FlClashX allows at most 5.
+/// Every emulated client follows redirects; FlClashX allows at most 5.
 pub const MAX_REDIRECTS: usize = 5;
 
 pub struct Fetch {
@@ -24,13 +26,30 @@ pub struct Fetch {
     pub response: Response,
     /// URLs that answered with a redirect.
     pub hops: Vec<Url>,
+    /// Addresses of every server that answered (direct connections only).
+    pub peers: Vec<IpAddr>,
+}
+
+impl Fetch {
+    /// Every host contacted: the configured one, redirect targets, the final one.
+    pub fn hosts(&self) -> Vec<String> {
+        let mut hosts: Vec<String> = Vec::new();
+        for url in self.hops.iter().chain([&self.url]) {
+            if !hosts.contains(&url.host) {
+                hosts.push(url.host.clone());
+            }
+        }
+        hosts
+    }
 }
 
 /// GETs the subscription exactly like the emulated client, following redirects
-/// with the same header set (Host updated per hop).
+/// with the same header set (Host updated per hop). A redirect from https to plain
+/// http is refused: it would send the token and HWID in clear text.
 pub fn fetch(client: &Client, emulation: &Emulation, url: &Url) -> Result<Fetch> {
     let mut url = url.clone();
     let mut hops = Vec::new();
+    let mut peers = Vec::new();
     loop {
         let headers = emulation.headers(&url);
         let request = Request {
@@ -42,13 +61,21 @@ pub fn fetch(client: &Client, emulation: &Emulation, url: &Url) -> Result<Fetch>
         let response = client
             .send(&Endpoint::from(&url), &request)
             .with_context(|| format!("GET {}", redact(&url)))?;
+        if let Some(peer) = response.peer
+            && !peers.contains(&peer)
+        {
+            peers.push(peer);
+        }
         if (300..400).contains(&response.status)
             && let Some(location) = response.header("location")
         {
             if hops.len() >= MAX_REDIRECTS {
                 bail!("too many redirects (> {MAX_REDIRECTS})");
             }
-            let next = url.join(location)?;
+            let next = url.join(location).context("bad redirect Location")?;
+            if url.scheme == Scheme::Https && next.scheme == Scheme::Http {
+                bail!("refusing a redirect from https to http ({})", redact(&next));
+            }
             hops.push(std::mem::replace(&mut url, next));
             continue;
         }
@@ -57,6 +84,7 @@ pub fn fetch(client: &Client, emulation: &Emulation, url: &Url) -> Result<Fetch>
             request_headers: headers,
             response,
             hops,
+            peers,
         });
     }
 }
@@ -106,9 +134,14 @@ impl Analysis {
     }
 }
 
-pub fn analyze(response: &Response) -> Analysis {
+/// Classifies a response. `strict_content_type` rejects `Content-Type: text/html`
+/// regardless of the body (Koala does; FlClashX and Happ only look at the body).
+pub fn analyze(response: &Response, strict_content_type: bool) -> Analysis {
     let info = ProviderInfo::from_headers(&response.headers);
-    let parsed = body::parse(&response.body, response.header("content-type"));
+    let content_type = response
+        .header("content-type")
+        .filter(|_| strict_content_type);
+    let parsed = body::parse(&response.body, content_type);
     let refusal = stub::hwid_refusal(info.hwid);
     let problem = if let Some(reason) = refusal {
         Some(Problem::Refused(reason))
@@ -135,7 +168,11 @@ fn http_problem(response: &Response) -> String {
         451 => ": the panel's response rules reject this client",
         _ => "",
     };
-    format!("HTTP {} {}{hint}", response.status, response.reason)
+    format!(
+        "HTTP {} {}{hint}",
+        response.status,
+        crate::util::sanitize(&response.reason)
+    )
 }
 
 /// Subscription URLs are credentials: keep the host, mask the token.
@@ -149,11 +186,7 @@ pub fn redact(url: &Url) -> String {
         .into_iter()
         .rev()
         .collect();
-    let scheme = match url.scheme {
-        crate::http::Scheme::Http => "http",
-        crate::http::Scheme::Https => "https",
-    };
-    format!("{scheme}://{}/…{tail}", url.host_header())
+    format!("{}://{}/…{tail}", url.scheme.as_str(), url.host_header())
 }
 
 #[cfg(test)]
@@ -169,7 +202,12 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             body: body.as_bytes().to_vec(),
+            peer: None,
         }
+    }
+
+    fn analyze_(response: &Response) -> Analysis {
+        analyze(response, false)
     }
 
     const GOOD: &str = "proxies:\n  - {name: NL, type: vless, server: nl.example.com, port: 443}\n";
@@ -178,7 +216,7 @@ mod tests {
 
     #[test]
     fn good_config_is_usable() {
-        let a = analyze(&response(200, &[("profile-title", "VPN")], GOOD));
+        let a = analyze_(&response(200, &[("profile-title", "VPN")], GOOD));
         assert!(a.problem.is_none());
         assert!(a.usable(false).is_some());
         assert_eq!(a.info.title.as_deref(), Some("VPN"));
@@ -187,7 +225,7 @@ mod tests {
     #[test]
     fn remnawave_hwid_refusal() {
         // Remnawave answers 200 with an empty body and x-hwid-* headers.
-        let a = analyze(&response(
+        let a = analyze_(&response(
             200,
             &[
                 ("x-hwid-active", "true"),
@@ -199,7 +237,7 @@ mod tests {
         assert!(matches!(a.problem, Some(Problem::Refused(_))));
         assert!(a.usable(true).is_none());
 
-        let a = analyze(&response(
+        let a = analyze_(&response(
             200,
             &[("x-hwid-max-devices-reached", "true")],
             STUB,
@@ -209,7 +247,7 @@ mod tests {
 
     #[test]
     fn stub_can_be_accepted_explicitly() {
-        let a = analyze(&response(200, &[], STUB));
+        let a = analyze_(&response(200, &[], STUB));
         assert!(matches!(a.problem, Some(Problem::Stub(_))));
         assert!(a.usable(false).is_none());
         assert!(a.usable(true).is_some());
@@ -217,10 +255,17 @@ mod tests {
 
     #[test]
     fn http_errors_and_garbage() {
-        let a = analyze(&response(403, &[], "Forbidden"));
+        let a = analyze_(&response(403, &[], "Forbidden"));
         assert!(a.problem.unwrap().message().contains("blocks this client"));
-        let a = analyze(&response(200, &[("content-type", "text/html")], "<html>"));
+        let a = analyze_(&response(200, &[("content-type", "text/html")], "<html>"));
         assert!(matches!(a.problem, Some(Problem::Invalid(_))));
+        // Only Koala trusts Content-Type; the others parse the body.
+        let html_typed = response(200, &[("content-type", "text/html")], GOOD);
+        assert!(analyze(&html_typed, false).problem.is_none());
+        assert!(matches!(
+            analyze(&html_typed, true).problem,
+            Some(Problem::Invalid(_))
+        ));
     }
 
     #[test]

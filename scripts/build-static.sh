@@ -27,4 +27,4 @@ if [ "$target" != "x86_64-unknown-linux-musl" ]; then
 fi
 
 cargo build --release --locked --target "$target" "$@"
-file "target/$target/release/mihomyak" 2>/dev/null || true
+file "${CARGO_TARGET_DIR:-target}/$target/release/mihomyak" 2>/dev/null || true

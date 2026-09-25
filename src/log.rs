@@ -38,7 +38,10 @@ pub fn write(level: Level, args: std::fmt::Arguments<'_>) {
         Level::Info => "INFO ",
         Level::Debug => "DEBUG",
     };
-    eprintln!(
+    // Not eprintln!: it panics when stderr is gone (closed pipe, detached terminal).
+    use std::io::Write;
+    let _ = writeln!(
+        std::io::stderr().lock(),
         "{} {tag} {args}",
         crate::util::fmt_timestamp(crate::util::now_unix())
     );

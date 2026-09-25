@@ -53,18 +53,109 @@ fn happ_default_build() -> &'static str {
     }
 }
 
-/// (`X-Device-Locale`, `Accept-Language`) as Qt produces them for a POSIX locale.
-/// Verified: `en`/C → (`EN`, `en,*`), `ru_RU` → (`RU`, `ru-RU,en,*`).
+/// (`X-Device-Locale`, `Accept-Language`) as Happ/Qt produce them for a POSIX
+/// locale. Qt sends `QLocale::system().name()` with `-`, followed by `,*` for
+/// English and `,en,*` otherwise; the C locale counts as `en`.
+/// Verified: `C`/`en` → (`EN`, `en,*`), `ru_RU` → (`RU`, `ru-RU,en,*`).
+/// A language without a region gets Qt's likely region (CLDR likely subtags);
+/// that part is derived from Qt's rules, not captured.
 fn happ_locale(locale: &str) -> (String, String) {
     let locale = locale.split(['.', '@']).next().unwrap_or_default();
     let (lang, region) = match locale.split_once(['_', '-']) {
         Some((l, r)) => (l.to_ascii_lowercase(), Some(r.to_ascii_uppercase())),
         None => (locale.to_ascii_lowercase(), None),
     };
-    match (lang.as_str(), region) {
-        ("" | "c" | "posix" | "en", None) => ("EN".into(), "en,*".into()),
-        (_, Some(region)) => (lang.to_ascii_uppercase(), format!("{lang}-{region},en,*")),
-        (_, None) => (lang.to_ascii_uppercase(), format!("{lang},en,*")),
+    if matches!(lang.as_str(), "" | "c" | "posix" | "en") && region.is_none() {
+        return ("EN".into(), "en,*".into());
+    }
+    let region = region.or_else(|| likely_region(&lang).map(str::to_owned));
+    let name = match region {
+        Some(region) => format!("{lang}-{region}"),
+        None => lang.clone(),
+    };
+    let tail = if lang == "en" { ",*" } else { ",en,*" };
+    (lang.to_ascii_uppercase(), format!("{name}{tail}"))
+}
+
+/// CLDR likely regions for the languages Happ users typically run.
+fn likely_region(lang: &str) -> Option<&'static str> {
+    Some(match lang {
+        "ru" => "RU",
+        "uk" => "UA",
+        "be" => "BY",
+        "kk" => "KZ",
+        "uz" => "UZ",
+        "ky" => "KG",
+        "tg" => "TJ",
+        "hy" => "AM",
+        "ka" => "GE",
+        "az" => "AZ",
+        "tk" => "TM",
+        "fa" => "IR",
+        "tr" => "TR",
+        "de" => "DE",
+        "fr" => "FR",
+        "es" => "ES",
+        "it" => "IT",
+        "pl" => "PL",
+        "pt" => "BR",
+        "zh" => "CN",
+        "ja" => "JP",
+        "ko" => "KR",
+        "ar" => "EG",
+        _ => return None,
+    })
+}
+
+/// Iteration order of a Dart VM `HashMap<String, …>` after inserting `keys` in
+/// order. dart:io keeps request headers in such a map, so this is the wire order
+/// of FlClashX's headers. Model of `_HashMap` (sdk/lib/_internal/vm/lib/
+/// collection_patch.dart): 8 initial buckets, new entries prepended to their
+/// chain, doubling when `4 * count > 3 * buckets` with chains re-prepended in
+/// bucket order; iteration walks buckets in index order.
+fn dart_hashmap_order<'a>(keys: &[&'a str]) -> Vec<&'a str> {
+    let mut buckets: Vec<Vec<&'a str>> = vec![Vec::new(); 8];
+    let mut count = 0usize;
+    for &key in keys {
+        let len = buckets.len();
+        let index = dart_string_hash(key) as usize & (len - 1);
+        if buckets[index].contains(&key) {
+            continue;
+        }
+        // Chains are stored head-last so "prepend" is a push.
+        buckets[index].push(key);
+        count += 1;
+        if count * 4 > len * 3 {
+            let mut grown: Vec<Vec<&'a str>> = vec![Vec::new(); len * 2];
+            for chain in &buckets {
+                for &entry in chain.iter().rev() {
+                    grown[dart_string_hash(entry) as usize & (len * 2 - 1)].push(entry);
+                }
+            }
+            buckets = grown;
+        }
+    }
+    buckets
+        .iter()
+        .flat_map(|chain| chain.iter().rev().copied())
+        .collect()
+}
+
+/// Dart VM `String.hashCode`: Jenkins one-at-a-time over UTF-16 code units,
+/// truncated to 30 bits, never 0.
+fn dart_string_hash(s: &str) -> u32 {
+    let mut h: u32 = 0;
+    for unit in s.encode_utf16() {
+        h = h.wrapping_add(u32::from(unit));
+        h = h.wrapping_add(h << 10);
+        h ^= h >> 6;
+    }
+    h = h.wrapping_add(h << 3);
+    h ^= h >> 11;
+    h = h.wrapping_add(h << 15);
+    match h & ((1 << 30) - 1) {
+        0 => 1,
+        h => h,
     }
 }
 
@@ -223,14 +314,19 @@ impl Emulation {
         let digest = sha256_hex(id.machine_id.as_bytes());
         match self.kind {
             // lib/utils/device_info_service.dart (Linux branch)
+            // device_info_plus: versionId = VERSION_ID ?? DISTRIB_RELEASE (an empty
+            // value is still sent), name = NAME ?? "Linux".
             ClientKind::FlClashX => DeviceHeaders {
                 hwid: self
                     .hwid_override
                     .clone()
                     .unwrap_or_else(|| digest[..16].to_ascii_uppercase()),
                 os: "Linux".into(),
-                os_version: id.os.get("VERSION_ID"),
-                model: id.os.get("NAME").unwrap_or_else(|| "Linux".into()),
+                os_version: id
+                    .os
+                    .dip_get("VERSION_ID")
+                    .or_else(|| id.os.dip_lsb("DISTRIB_RELEASE")),
+                model: id.os.dip_get("NAME").unwrap_or_else(|| "Linux".into()),
             },
             // Captured from Happ 4.3.0: QSysInfo machineUniqueId / hostname_arch /
             // productType_productVersion.
@@ -274,29 +370,23 @@ impl Emulation {
     }
 
     /// The complete, ordered request header list for a subscription fetch.
+    /// Control characters (a CRLF-terminated os-release, an odd hostname) are
+    /// dropped from values: they would corrupt or inject request headers.
     pub fn headers(&self, url: &Url) -> Vec<(String, String)> {
+        let mut headers = self.build_headers(url);
+        for (_, value) in &mut headers {
+            value.retain(|c| !c.is_control());
+        }
+        headers
+    }
+
+    fn build_headers(&self, url: &Url) -> Vec<(String, String)> {
         let host = url.host_header();
         let ua = self.user_agent();
         let dev = self.send_device_headers.then(|| self.device_headers());
         let mut headers: Vec<(&str, String)> = Vec::with_capacity(10);
         match self.kind {
-            ClientKind::FlClashX => {
-                // dart:io lower-cases names; order is its internal HashMap iteration,
-                // stable for this key set (captured from the real app).
-                headers.push(("user-agent", ua));
-                if let Some(d) = &dev {
-                    headers.push(("x-device-model", d.model.clone()));
-                    if let Some(v) = &d.os_version {
-                        headers.push(("x-ver-os", v.clone()));
-                    }
-                }
-                headers.push(("accept-encoding", "gzip".into()));
-                headers.push(("host", host));
-                if let Some(d) = &dev {
-                    headers.push(("x-device-os", d.os.clone()));
-                    headers.push(("x-hwid", d.hwid.clone()));
-                }
-            }
+            ClientKind::FlClashX => return self.flclashx_headers(host, ua, dev),
             ClientKind::Koala => {
                 // axios 1.x on Node 22: defaults, user headers, then http module's.
                 headers.push(("Accept", "application/json, text/plain, */*".into()));
@@ -356,6 +446,43 @@ impl Emulation {
             }
         }
         out
+    }
+
+    /// dart:io lower-cases header names and writes them in the iteration order of
+    /// its internal `HashMap`, so the order depends on the whole key set (extra
+    /// headers included). Insertion order: HttpClient sets `host` and
+    /// `accept-encoding`, then FlClashX adds `user-agent` and the device headers.
+    fn flclashx_headers(
+        &self,
+        host: String,
+        ua: String,
+        dev: Option<DeviceHeaders>,
+    ) -> Vec<(String, String)> {
+        let mut values: Vec<(String, String)> = vec![
+            ("host".into(), host),
+            ("accept-encoding".into(), "gzip".into()),
+            ("user-agent".into(), ua),
+        ];
+        if let Some(d) = dev {
+            values.push(("x-hwid".into(), d.hwid));
+            values.push(("x-device-os".into(), d.os));
+            values.push(("x-device-model".into(), d.model));
+            if let Some(v) = d.os_version {
+                values.push(("x-ver-os".into(), v));
+            }
+        }
+        for (name, value) in &self.extra_headers {
+            let name = name.to_ascii_lowercase();
+            match values.iter_mut().find(|(k, _)| *k == name) {
+                Some(slot) => slot.1 = value.clone(),
+                None => values.push((name, value.clone())),
+            }
+        }
+        let keys: Vec<&str> = values.iter().map(|(k, _)| k.as_str()).collect();
+        dart_hashmap_order(&keys)
+            .into_iter()
+            .filter_map(|key| values.iter().find(|(k, _)| k == key).cloned())
+            .collect()
     }
 
     /// Whether the emulated client honours the `flclashx-newdomain` header.
@@ -428,6 +555,100 @@ mod tests {
     }
 
     #[test]
+    fn dart_hashmap_model_reproduces_captures() {
+        // The 7-key order captured from FlClashX 0.4.2 (resize to 16 buckets).
+        let seven = [
+            "host",
+            "accept-encoding",
+            "user-agent",
+            "x-hwid",
+            "x-device-os",
+            "x-device-model",
+            "x-ver-os",
+        ];
+        assert_eq!(
+            dart_hashmap_order(&seven),
+            [
+                "user-agent",
+                "x-device-model",
+                "x-ver-os",
+                "accept-encoding",
+                "host",
+                "x-device-os",
+                "x-hwid"
+            ]
+        );
+        // Without x-ver-os the map never resizes and the order changes.
+        assert_eq!(
+            dart_hashmap_order(&seven[..6]),
+            [
+                "user-agent",
+                "x-device-model",
+                "accept-encoding",
+                "x-hwid",
+                "x-device-os",
+                "host"
+            ]
+        );
+        assert_eq!(
+            dart_hashmap_order(&seven[..3]),
+            ["user-agent", "accept-encoding", "host"]
+        );
+        assert_eq!(dart_string_hash(""), 1);
+    }
+
+    #[test]
+    fn flclashx_order_follows_the_key_set() {
+        let arch = "NAME=\"Arch Linux\"\nID=arch\n";
+        let e = emulation(ClientKind::FlClashX, arch);
+        let names: Vec<String> = e
+            .headers(&Url::parse("https://s.example/a").unwrap())
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "user-agent",
+                "x-device-model",
+                "accept-encoding",
+                "x-hwid",
+                "x-device-os",
+                "host"
+            ]
+        );
+    }
+
+    #[test]
+    fn flclashx_reads_os_release_like_device_info_plus() {
+        let os = OsRelease::from_raw("NAME=\"Debian GNU/Linux\"\nVERSION_ID=\n")
+            .with_lsb("DISTRIB_RELEASE=12\n");
+        let identity = Identity {
+            machine_id: "0d0af05ee8fd4dc29275718f2ce4dff1".into(),
+            os,
+            kernel_release: String::new(),
+            hostname: "vm".into(),
+            locale: "en".into(),
+        };
+        let e = Emulation::new(&Config::default(), identity).unwrap();
+        let d = e.device_headers();
+        // An empty VERSION_ID is a value, so lsb-release is not consulted.
+        assert_eq!(d.os_version.as_deref(), Some(""));
+        assert_eq!(d.model, "Debian GNU/Linux");
+
+        let lsb_only = OsRelease::from_raw("NAME=Alpine\n").with_lsb("DISTRIB_RELEASE=3.22\n");
+        let identity = Identity {
+            machine_id: "x".into(),
+            os: lsb_only,
+            kernel_release: String::new(),
+            hostname: "vm".into(),
+            locale: "en".into(),
+        };
+        let e = Emulation::new(&Config::default(), identity).unwrap();
+        assert_eq!(e.device_headers().os_version.as_deref(), Some("3.22"));
+    }
+
+    #[test]
     fn distro_without_version_id() {
         // Arch Linux ships no VERSION_ID.
         let arch = "NAME=\"Arch Linux\"\nPRETTY_NAME=\"Arch Linux\"\nID=arch\n";
@@ -461,11 +682,28 @@ mod tests {
         };
         let e = Emulation::new(&config, identity).unwrap();
         let h = e.headers(&Url::parse("https://s.example/a").unwrap());
-        assert_eq!(h[0], ("user-agent".into(), "FlClash X/v9.9.9".into()));
-        assert_eq!(h[3], ("Accept-Encoding".into(), "identity".into()));
-        assert_eq!(h[4], ("host".into(), "s.example".into()));
-        assert_eq!(h[6], ("x-hwid".into(), "CUSTOM-HWID-123".into()));
-        assert_eq!(h.last().unwrap(), &("X-New".into(), "1".into()));
+        let get = |name: &str| h.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
+        assert_eq!(get("user-agent"), Some("FlClash X/v9.9.9"));
+        // dart:io lower-cases names; overrides keep their slot, new keys join the map.
+        assert_eq!(get("accept-encoding"), Some("identity"));
+        assert_eq!(get("x-hwid"), Some("CUSTOM-HWID-123"));
+        assert_eq!(get("x-new"), Some("1"));
+        assert_eq!(h.len(), 8);
+        let mut keys: Vec<&str> = h.iter().map(|(k, _)| k.as_str()).collect();
+        let order = dart_hashmap_order(&[
+            "host",
+            "accept-encoding",
+            "user-agent",
+            "x-hwid",
+            "x-device-os",
+            "x-device-model",
+            "x-ver-os",
+            "x-new",
+        ]);
+        assert_eq!(keys, order);
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), 8);
     }
 
     #[test]
@@ -550,7 +788,9 @@ mod tests {
             happ_locale("ru_RU.UTF-8"),
             ("RU".into(), "ru-RU,en,*".into())
         );
-        assert_eq!(happ_locale("uk"), ("UK".into(), "uk,en,*".into()));
+        assert_eq!(happ_locale("uk"), ("UK".into(), "uk-UA,en,*".into()));
+        assert_eq!(happ_locale("en_GB.UTF-8"), ("EN".into(), "en-GB,*".into()));
+        assert_eq!(happ_locale("eo"), ("EO".into(), "eo,en,*".into()));
     }
 
     #[test]

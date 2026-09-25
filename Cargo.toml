@@ -1,6 +1,7 @@
 [package]
 name = "mihomyak"
-description = "Lightweight mihomo supervisor for CIS-style subscriptions that emulates FlClashX / Koala Clash."
+description = "Lightweight mihomo supervisor for CIS-style subscriptions that emulates FlClashX / Koala Clash / Happ."
+publish = false
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
@@ -32,7 +33,7 @@ libc = "0.2"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"], optional = true }
 ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-ruzstd = { version = "0.9.0", default-features = false, features = ["std"] }
+ruzstd = { version = "0.9", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_norway = "0.9"

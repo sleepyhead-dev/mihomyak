@@ -4,11 +4,31 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
+use crate::config::Config;
 use crate::http::{Client, Endpoint, Request, Response};
 use crate::util::encode_path_segment;
+
+/// Timeout for a single delay test, shared by the CLI and the TUI.
+pub const DELAY_TIMEOUT_MS: u32 = 5000;
+
+/// mihomo answered with a non-2xx status: it is up but refused the request
+/// (as opposed to a transport error, where it may not be running at all).
+#[derive(Debug)]
+pub struct Rejected {
+    pub status: u16,
+    pub message: String,
+}
+
+impl std::fmt::Display for Rejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HTTP {} {}", self.status, self.message)
+    }
+}
+
+impl std::error::Error for Rejected {}
 
 pub struct Api {
     endpoint: Endpoint,
@@ -30,6 +50,11 @@ impl Group {
     pub fn selectable(&self) -> bool {
         self.kind == "Selector"
     }
+
+    /// A selector the user picks from (GLOBAL only matters in global mode).
+    pub fn is_user_selector(&self) -> bool {
+        self.selectable() && self.name != "GLOBAL"
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -42,6 +67,15 @@ pub struct Snapshot {
 }
 
 impl Api {
+    /// API client for the configured controller (secret from config or data dir).
+    pub fn from_config(config: &Config) -> Result<Self> {
+        let secret = match &config.core.secret {
+            Some(secret) => secret.clone(),
+            None => crate::store::Store::open(&config.data_dir)?.secret()?,
+        };
+        Self::new(&config.core.controller, &secret)
+    }
+
     /// `controller` is `host:port` or `unix:/path` (same syntax as `core.controller`).
     pub fn new(controller: &str, secret: &str) -> Result<Self> {
         let (endpoint, host) = match controller.strip_prefix("unix:") {
@@ -78,6 +112,7 @@ impl Api {
         let client = Client {
             connect_timeout: Duration::from_secs(3),
             io_timeout: Duration::from_secs(30),
+            total_timeout: Duration::from_secs(60),
             proxy: None,
             max_body: 16 * 1024 * 1024,
         };
@@ -112,11 +147,17 @@ impl Api {
             let message = serde_json::from_slice::<Value>(&response.body)
                 .ok()
                 .and_then(|v| v["message"].as_str().map(str::to_owned))
-                .unwrap_or_else(|| String::from_utf8_lossy(&response.body).trim().to_owned());
-            bail!(
-                "mihomo API {method} {target}: HTTP {} {message}",
-                response.status
-            );
+                .unwrap_or_else(|| String::from_utf8_lossy(&response.body).into_owned());
+            let message: String = crate::util::sanitize(message.trim())
+                .chars()
+                .take(500)
+                .collect();
+            let path = target.split('?').next().unwrap_or_default();
+            return Err(anyhow::Error::new(Rejected {
+                status: response.status,
+                message,
+            })
+            .context(format!("mihomo API {method} {path}")));
         }
         Ok(response)
     }
@@ -145,6 +186,7 @@ impl Api {
     }
 
     /// Hot-reloads a config file (must live inside mihomo's home directory).
+    /// A [`Rejected`] error means mihomo is running but refused the config.
     pub fn reload(&self, path: &std::path::Path) -> Result<()> {
         let body = json!({ "path": path.to_string_lossy() });
         self.call("PUT", "/configs?force=true", Some(&body))?;
@@ -161,7 +203,8 @@ impl Api {
         Ok(())
     }
 
-    /// Tests every member of a group; returns name → delay (ms). Failed proxies are absent.
+    /// Tests every member of a group; returns name → delay (ms). Failed proxies are
+    /// absent; when all fail mihomo answers 504, which is an empty map here.
     pub fn group_delay(
         &self,
         group: &str,
@@ -173,7 +216,15 @@ impl Api {
             encode_path_segment(group),
             encode_path_segment(url)
         );
-        let v = self.json("GET", &target, None)?;
+        let v = match self.json("GET", &target, None) {
+            Err(e)
+                if e.downcast_ref::<Rejected>()
+                    .is_some_and(|r| r.status == 504) =>
+            {
+                return Ok(HashMap::new());
+            }
+            other => other?,
+        };
         Ok(v.as_object()
             .map(|m| {
                 m.iter()
@@ -181,12 +232,6 @@ impl Api {
                     .collect()
             })
             .unwrap_or_default())
-    }
-
-    /// Drops existing connections so a new selection takes effect immediately.
-    pub fn close_connections(&self) -> Result<()> {
-        self.call("DELETE", "/connections", None)?;
-        Ok(())
     }
 
     /// (upload total, download total, active connections) since core start.

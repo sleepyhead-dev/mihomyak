@@ -47,6 +47,7 @@ pub enum Command {
     },
     /// Show the emulated device and the exact request headers.
     Identity {
+        /// Show what another client would send.
         #[arg(long, value_name = "CLIENT", value_parser = parse_client)]
         client: Option<ClientKind>,
     },
@@ -54,19 +55,31 @@ pub enum Command {
     Status,
     /// List proxy groups, or the proxies of one group.
     #[command(alias = "groups")]
-    Proxies { group: Option<String> },
+    Proxies {
+        /// Group name: exact, case-insensitive or a unique part of it.
+        group: Option<String>,
+    },
     /// Select a proxy in a group.
-    Select { group: String, proxy: String },
+    Select {
+        /// Group name: exact, case-insensitive or a unique part of it.
+        group: String,
+        /// Proxy name, matched the same way.
+        proxy: String,
+    },
     /// Measure proxy delays (all selectable groups, or one group).
     Test {
+        /// Group name: exact, case-insensitive or a unique part of it.
         group: Option<String>,
-        #[arg(long, default_value = "https://www.gstatic.com/generate_204")]
+        /// URL requested through each proxy.
+        #[arg(long, default_value = crate::profile::HEALTH_CHECK_URL)]
         url: String,
-        #[arg(long, default_value_t = 5000, value_name = "MS")]
+        /// Per-proxy timeout.
+        #[arg(long, default_value_t = crate::api::DELAY_TIMEOUT_MS, value_name = "MS")]
         timeout: u32,
     },
     /// Show or set the routing mode.
     Mode {
+        /// New mode (omit to show the current one).
         #[arg(value_parser = ["rule", "global", "direct"])]
         mode: Option<String>,
     },
@@ -91,13 +104,13 @@ pub enum CoreCommand {
         /// Release tag, e.g. v1.19.31 (default: latest).
         #[arg(long)]
         version: Option<String>,
-        /// Destination path (default: <data>/bin/mihomo).
+        /// Destination path (default: DATA_DIR/bin/mihomo).
         #[arg(long)]
         dest: Option<PathBuf>,
-        /// Base URL replacing https://github.com (mirrors for restricted networks).
+        /// Base URL replacing github.com for downloads (mirrors for restricted networks).
         #[arg(long, env = "MIHOMYAK_GITHUB_MIRROR")]
         mirror: Option<String>,
-        /// Expected SHA-256 of the downloaded .gz (strongly advised with --mirror).
+        /// Expected SHA-256 of the downloaded .gz (required with --mirror).
         #[arg(long, value_name = "HEX")]
         sha256: Option<String>,
     },

@@ -61,30 +61,63 @@ impl Identity {
     }
 }
 
-/// Contents of an os-release file, kept raw because the emulated clients parse it
-/// differently (device_info_plus unquotes values, Koala applies ad-hoc regexes).
+/// os-release facts, kept raw because every emulated client parses them its own
+/// way (see `docs/SUBSCRIPTIONS.md` §7): device_info_plus (FlClashX), Koala's
+/// regexes, Qt's QSysInfo (Happ).
 #[derive(Debug, Clone, Default)]
 pub struct OsRelease {
-    raw: String,
+    /// The configured os-release file (normally `/etc/os-release`).
+    primary: Option<String>,
+    /// `/usr/lib/os-release`, used when the primary file is missing.
+    fallback: Option<String>,
+    /// `/etc/lsb-release` (device_info_plus falls back to its `DISTRIB_*` keys).
+    lsb: Option<String>,
+    /// `[device] os_*` overrides; win for every parser.
+    overrides: Vec<(String, String)>,
 }
 
 impl OsRelease {
-    /// Reads `path`, falling back to `/usr/lib/os-release` like systemd and
-    /// device_info_plus do. A missing file yields an empty record.
     pub fn read(path: &Path) -> Self {
-        let raw = std::fs::read_to_string(path)
-            .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
-            .unwrap_or_default();
-        Self { raw }
+        let read = |p: &str| std::fs::read_to_string(p).ok();
+        Self {
+            primary: std::fs::read_to_string(path).ok(),
+            fallback: read("/usr/lib/os-release"),
+            lsb: read("/etc/lsb-release"),
+            overrides: Vec::new(),
+        }
     }
 
     pub fn from_raw(raw: impl Into<String>) -> Self {
-        Self { raw: raw.into() }
+        Self {
+            primary: Some(raw.into()),
+            ..Self::default()
+        }
     }
 
-    /// Value per the os-release spec: `KEY=value`, optionally single/double quoted.
+    pub fn with_lsb(mut self, raw: impl Into<String>) -> Self {
+        self.lsb = Some(raw.into());
+        self
+    }
+
+    fn overridden(&self, key: &str) -> Option<String> {
+        self.overrides
+            .iter()
+            .rev()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+    }
+
+    fn effective(&self) -> Option<&str> {
+        self.primary.as_deref().or(self.fallback.as_deref())
+    }
+
+    /// Value per the os-release spec (systemd, Qt): `KEY=value`, optionally
+    /// single/double quoted; the last assignment wins.
     pub fn get(&self, key: &str) -> Option<String> {
-        self.raw.lines().rev().find_map(|line| {
+        if let Some(v) = self.overridden(key) {
+            return Some(v);
+        }
+        self.effective()?.lines().rev().find_map(|line| {
             let value = line.trim().strip_prefix(key)?.strip_prefix('=')?.trim();
             let unquoted = ['"', '\'']
                 .iter()
@@ -94,10 +127,30 @@ impl OsRelease {
         })
     }
 
-    /// Koala Clash's `/^KEY="?([^"\n]+)"?/m`: first match wins, value stops at a
-    /// double quote, single quotes are kept verbatim.
+    /// device_info_plus `toKeyValues()`: a line is split on every `=`; unless that
+    /// yields exactly two parts the value is null. Only double quotes are removed
+    /// (prefix and suffix independently), nothing is trimmed, the last line wins.
+    /// An empty value stays `Some("")`.
+    pub fn dip_get(&self, key: &str) -> Option<String> {
+        if let Some(v) = self.overridden(key) {
+            return Some(v);
+        }
+        dip_lookup(self.effective()?, key)
+    }
+
+    /// device_info_plus lookup in `/etc/lsb-release`.
+    pub fn dip_lsb(&self, key: &str) -> Option<String> {
+        dip_lookup(self.lsb.as_deref()?, key)
+    }
+
+    /// Koala Clash's `/^KEY="?([^"\n]+)"?/m` over `cat /etc/os-release` (no
+    /// `/usr/lib` fallback): first match wins, the value stops at a double quote,
+    /// single quotes are kept verbatim.
     pub fn koala_get(&self, key: &str) -> Option<String> {
-        self.raw.lines().find_map(|line| {
+        if let Some(v) = self.overridden(key) {
+            return Some(v);
+        }
+        self.primary.as_deref()?.lines().find_map(|line| {
             let value = line.strip_prefix(key)?.strip_prefix('=')?;
             let value = value.strip_prefix('"').unwrap_or(value);
             let end = value.find('"').unwrap_or(value.len());
@@ -105,15 +158,24 @@ impl OsRelease {
         })
     }
 
-    /// Replaces every occurrence of one key, so both parsers see the override.
     fn set(&mut self, key: &str, value: &str) {
-        let kept: Vec<&str> = self
-            .raw
-            .lines()
-            .filter(|l| !l.starts_with(&format!("{key}=")))
-            .collect();
-        self.raw = format!("{key}=\"{value}\"\n{}", kept.join("\n"));
+        self.overrides.push((key.to_owned(), value.to_owned()));
     }
+}
+
+fn dip_lookup(raw: &str, key: &str) -> Option<String> {
+    let mut found = None;
+    for line in raw.lines() {
+        let parts: Vec<&str> = line.split('=').collect();
+        if parts.len() == 2 && parts[0] == key {
+            let value = parts[1].strip_prefix('"').unwrap_or(parts[1]);
+            let value = value.strip_suffix('"').unwrap_or(value);
+            found = Some(value.to_owned());
+        } else if parts.len() != 2 && line == key {
+            found = None;
+        }
+    }
+    found
 }
 
 /// Validates a machine-id supplied by the user or read from disk.
@@ -153,12 +215,41 @@ ID=ubuntu
     }
 
     #[test]
-    fn koala_regex_quirks() {
-        let os = OsRelease::from_raw("NAME='Weird'\nVERSION_ID=\n");
+    fn parser_quirks() {
+        let os = OsRelease::from_raw("NAME='Weird'\nVERSION_ID=\nBUG=a=b\n");
         assert_eq!(os.get("NAME").as_deref(), Some("Weird"));
         assert_eq!(os.koala_get("NAME").as_deref(), Some("'Weird'"));
+        assert_eq!(
+            os.dip_get("NAME").as_deref(),
+            Some("'Weird'"),
+            "only double quotes"
+        );
         assert_eq!(os.get("VERSION_ID"), None);
         assert_eq!(os.koala_get("VERSION_ID"), None);
+        assert_eq!(
+            os.dip_get("VERSION_ID").as_deref(),
+            Some(""),
+            "FlClashX sends it empty"
+        );
+        assert_eq!(os.dip_get("BUG"), None, "more than one '=' yields null");
+    }
+
+    #[test]
+    fn lsb_and_fallback_sources() {
+        let os = OsRelease::from_raw("NAME=\"Arch Linux\"\n").with_lsb("DISTRIB_RELEASE=rolling\n");
+        assert_eq!(os.dip_get("VERSION_ID"), None);
+        assert_eq!(os.dip_lsb("DISTRIB_RELEASE").as_deref(), Some("rolling"));
+        let only_fallback = OsRelease {
+            fallback: Some("NAME=Fallback\n".into()),
+            ..OsRelease::default()
+        };
+        assert_eq!(only_fallback.get("NAME").as_deref(), Some("Fallback"));
+        assert_eq!(only_fallback.dip_get("NAME").as_deref(), Some("Fallback"));
+        assert_eq!(
+            only_fallback.koala_get("NAME"),
+            None,
+            "Koala reads /etc only"
+        );
     }
 
     #[test]

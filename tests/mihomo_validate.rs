@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use mihomyak::config::Config;
+use mihomyak::profile::Params;
 use mihomyak::subscription::body;
 
 fn mihomo() -> Option<PathBuf> {
@@ -24,10 +25,21 @@ fn validate(name: &str, body: &[u8], gateway: bool) {
 }
 
 fn validate_with(name: &str, body: &[u8], config: &Config) {
-    let Some(bin) = mihomo() else { return };
+    // Parsing and building run everywhere; only the mihomo check needs the binary.
     let content = body::parse(body, None).unwrap_or_else(|e| panic!("{name}: {e}"));
     assert!(content.notes.is_empty(), "{name}: {:?}", content.notes);
-    let built = mihomyak::profile::build(&content, config, "secret", "rule").unwrap();
+    let params = Params {
+        secret: "secret",
+        mode: "rule",
+        panel_hosts: &["sub.example.com".to_owned()],
+        panel_ips: &[
+            "203.0.113.7".parse().unwrap(),
+            "2001:db8::7".parse().unwrap(),
+        ],
+    };
+    let built = mihomyak::profile::build(&content, config, &params)
+        .unwrap_or_else(|e| panic!("{name}: {e:#}"));
+    let Some(bin) = mihomo() else { return };
     let home = tempfile::tempdir().unwrap();
     std::fs::write(home.path().join("config.yaml"), &built.config_yaml).unwrap();
     if let Some(provider) = &built.provider {

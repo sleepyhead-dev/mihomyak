@@ -9,7 +9,9 @@ use serde_norway::{Mapping, Value};
 use super::headers::{decode_base64, percent_decode};
 
 /// Share-link schemes mihomo's converter understands. `http(s)` is deliberately
-/// absent: provider messages often contain plain web links.
+/// absent: provider messages often contain plain web links. `wireguard`/`wg` and
+/// `mieru` links pass `mihomo -t` but fail at runtime, so they are not treated as
+/// proxies either.
 const LINK_SCHEMES: &[&str] = &[
     "vless",
     "vmess",
@@ -23,10 +25,12 @@ const LINK_SCHEMES: &[&str] = &[
     "socks",
     "socks5",
     "anytls",
-    "wireguard",
-    "wg",
-    "mieru",
 ];
+
+/// libyaml handles deeply nested flow collections in quadratic time (80 KB of `[`
+/// takes seconds), so absurd nesting is refused before parsing. Real configs stay
+/// below ten levels.
+const MAX_FLOW_DEPTH: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -90,7 +94,7 @@ pub fn parse(body: &[u8], content_type: Option<&str>) -> Result<Content, String>
     if text.starts_with('{') || text.starts_with('[') {
         return parse_json(text);
     }
-    if let Some(content) = parse_yaml(text) {
+    if let Some(content) = parse_yaml(text)? {
         return Ok(content);
     }
     if let Some(content) = parse_links(text) {
@@ -140,15 +144,42 @@ fn parse_json(text: &str) -> Result<Content, String> {
     })
 }
 
-fn parse_yaml(text: &str) -> Option<Content> {
-    let mut value: Value = serde_norway::from_str(text).ok()?;
-    let map = value.as_mapping()?;
-    let has = |key: &str| map.contains_key(key);
-    if !has("proxies") && !has("proxy-providers") && !has("proxy-groups") {
-        return None;
+/// `Ok(None)` when the text is not a clash config at all; `Err` when it clearly is
+/// one (a top-level `proxies:` & co.) but does not parse, so the reason is logged.
+fn parse_yaml(text: &str) -> Result<Option<Content>, String> {
+    const KEYS: [&str; 3] = ["proxies", "proxy-providers", "proxy-groups"];
+    let looks_like_config = text.lines().any(|line| {
+        KEYS.iter().any(|key| {
+            line.strip_prefix(key)
+                .is_some_and(|rest| rest.starts_with(':'))
+        })
+    });
+    if flow_depth_exceeds(text, MAX_FLOW_DEPTH) {
+        return if looks_like_config {
+            Err(format!("YAML nesting deeper than {MAX_FLOW_DEPTH} levels"))
+        } else {
+            Ok(None)
+        };
     }
-    value.apply_merge().ok()?;
-    let map = value.as_mapping()?;
+    let mut value: Value = match serde_norway::from_str(text) {
+        Ok(value) => value,
+        Err(e) if looks_like_config => {
+            return Err(crate::util::sanitize(&format!("invalid YAML config: {e}")));
+        }
+        Err(_) => return Ok(None),
+    };
+    let Some(map) = value.as_mapping() else {
+        return Ok(None);
+    };
+    if !KEYS.iter().any(|key| map.contains_key(*key)) {
+        return Ok(None);
+    }
+    value
+        .apply_merge()
+        .map_err(|e| format!("invalid YAML merge keys: {e}"))?;
+    let Some(map) = value.as_mapping() else {
+        return Ok(None);
+    };
     let endpoints = map
         .get("proxies")
         .and_then(Value::as_sequence)
@@ -163,14 +194,64 @@ fn parse_yaml(text: &str) -> Option<Content> {
         .get("proxy-providers")
         .and_then(Value::as_mapping)
         .is_some_and(|m| !m.is_empty());
-    Some(Content {
+    Ok(Some(Content {
         format: Format::Mihomo,
         yaml: Some(value),
         links: None,
         endpoints,
         has_providers,
         notes: Vec::new(),
-    })
+    }))
+}
+
+/// Deepest nesting of flow collections (`[`/`{`), skipping quoted scalars and
+/// comments. Approximate on purpose: it only has to be right for inputs that
+/// would be slow to parse.
+fn flow_depth_exceeds(text: &str, max: usize) -> bool {
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut quote: Option<u8> = None;
+    let mut comment = false;
+    // Last non-blank byte, to tell `'quoted'` from an apostrophe in a plain scalar.
+    let mut prev = b'\n';
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        i += 1;
+        if comment {
+            if b == b'\n' {
+                comment = false;
+                prev = b;
+            }
+            continue;
+        }
+        if let Some(q) = quote {
+            if q == b'"' && b == b'\\' {
+                i += 1;
+            } else if b == q {
+                quote = None;
+                prev = b;
+            }
+            continue;
+        }
+        match b {
+            b'#' if i < 2 || bytes[i - 2].is_ascii_whitespace() => comment = true,
+            b'\'' | b'"' if matches!(prev, b'[' | b'{' | b',' | b':' | b'-' | b'\n') => {
+                quote = Some(b)
+            }
+            b'[' | b'{' => {
+                depth += 1;
+                if depth > max {
+                    return true;
+                }
+            }
+            b']' | b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if b == b'\n' || !b.is_ascii_whitespace() {
+            prev = b;
+        }
+    }
+    false
 }
 
 fn yaml_endpoint(proxy: &Mapping) -> Option<Endpoint> {
@@ -242,27 +323,45 @@ fn link_endpoint(link: &str) -> Option<Endpoint> {
         "ss" if !rest.contains('@') => {
             // SIP002 legacy form: ss://base64(method:password@host:port)
             let decoded = String::from_utf8(decode_base64(rest.split('?').next()?)?).ok()?;
-            authority_endpoint(decoded.rsplit_once('@')?.1, name)
+            authority_endpoint(decoded.rsplit_once('@')?.1, name, None)
         }
-        _ => {
-            let authority = rest.split(['/', '?']).next()?;
-            let authority = authority.rsplit_once('@').map_or(authority, |(_, a)| a);
-            authority_endpoint(authority, name)
+        scheme => {
+            // userinfo may contain `/` (base64, passwords), so find `@` first.
+            let before_query = rest.split('?').next()?;
+            let host_part = before_query
+                .rsplit_once('@')
+                .map_or(before_query, |(_, host)| host);
+            let authority = host_part.split('/').next()?;
+            let default_port = matches!(scheme, "hysteria2" | "hy2" | "tuic").then_some(443);
+            authority_endpoint(authority, name, default_port)
         }
     }
 }
 
-fn authority_endpoint(authority: &str, name: String) -> Option<Endpoint> {
+/// `host:port`, `[v6]:port`, or a bare host when the scheme has a default port.
+/// Port hopping lists (`443,20000-30000`) yield their first port.
+fn authority_endpoint(
+    authority: &str,
+    name: String,
+    default_port: Option<u16>,
+) -> Option<Endpoint> {
     let (server, port) = if let Some(rest) = authority.strip_prefix('[') {
-        let (host, port) = rest.split_once("]:")?;
-        (host, port)
+        let (host, tail) = rest.split_once(']')?;
+        (host, tail.strip_prefix(':'))
     } else {
-        authority.rsplit_once(':')?
+        match authority.rsplit_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        }
+    };
+    let port = match port {
+        Some(port) => port.split([',', '-']).next()?.trim().parse().ok()?,
+        None => default_port?,
     };
     Some(Endpoint {
         name,
         server: server.to_owned(),
-        port: port.parse().ok()?,
+        port,
     })
 }
 
@@ -371,5 +470,48 @@ rules:
         assert!(err("happ://crypt5/abc", None).contains("happ"));
         assert!(err("just some text", None).contains("unrecognised"));
         assert!(err("key: value", None).contains("unrecognised"));
+        assert!(err("proxies:\n  - {name: a\n", None).contains("invalid YAML"));
+        assert!(err("wireguard://k@1.2.3.4:51820#WG", None).contains("unrecognised"));
+    }
+
+    #[test]
+    fn refuses_pathological_nesting_quickly() {
+        let deep = format!("proxies: {}{}", "[".repeat(100_000), "]".repeat(100_000));
+        let started = std::time::Instant::now();
+        assert!(
+            parse(deep.as_bytes(), None)
+                .unwrap_err()
+                .contains("nesting")
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        // Brackets inside quotes and comments do not count.
+        let quoted = format!(
+            "proxies:\n  - {{name: '{}', type: ss, server: a.example, port: 1}} # {}\n",
+            "[".repeat(500),
+            "{".repeat(500)
+        );
+        assert!(!flow_depth_exceeds(&quoted, MAX_FLOW_DEPTH));
+        assert!(!flow_depth_exceeds("name: it's [x] {y}\n", 1));
+    }
+
+    #[test]
+    fn link_endpoint_edge_cases() {
+        let ep = |link: &str| link_endpoint(link).map(|e| (e.server, e.port));
+        let own = |s: &str, p: u16| Some((s.to_owned(), p));
+        assert_eq!(ep("hy2://auth@hy.example?sni=x#H"), own("hy.example", 443));
+        assert_eq!(
+            ep("hysteria2://a@h.example:443,20000-30000/?x#H"),
+            own("h.example", 443)
+        );
+        assert_eq!(
+            ep("hy2://a@h.example:20000-30000#H"),
+            own("h.example", 20000)
+        );
+        assert_eq!(ep("tuic://u:p@[2001:db8::2]#T"), own("2001:db8::2", 443));
+        assert_eq!(
+            ep("trojan://pa/ss@t.example:8443/?sni=x#T"),
+            own("t.example", 8443)
+        );
+        assert_eq!(ep("vless://id@v.example#no-port"), None);
     }
 }

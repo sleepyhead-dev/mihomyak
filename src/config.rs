@@ -151,7 +151,7 @@ fn default_group_type() -> GroupType {
 }
 
 fn default_health_url() -> String {
-    "https://www.gstatic.com/generate_204".into()
+    crate::profile::HEALTH_CHECK_URL.into()
 }
 
 fn default_health_interval() -> HumanDuration {
@@ -221,8 +221,8 @@ impl std::str::FromStr for Interval {
             return Ok(Self::Off);
         }
         let d = crate::util::parse_duration(s)?;
-        if d < Duration::from_secs(60) {
-            bail!("update interval {s:?} is shorter than one minute");
+        if d < crate::updater::MIN_INTERVAL {
+            bail!("update interval {s:?} is shorter than the 5 minute minimum");
         }
         Ok(Self::Fixed(d))
     }
@@ -504,8 +504,50 @@ impl Config {
             }
         }
         for header in &self.subscription.headers {
-            if !header.contains(':') {
+            let Some((name, _)) = header.split_once(':') else {
                 bail!("subscription.headers entry {header:?} must look like \"Name: value\"");
+            };
+            let token = |b: u8| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b);
+            if name.trim().is_empty() || !name.trim().bytes().all(token) {
+                bail!("subscription.headers entry {header:?} has an invalid header name");
+            }
+        }
+        // These end up in request headers: CR/LF would inject extra headers.
+        let header_values = [
+            (
+                "subscription.headers",
+                self.subscription.headers.iter().collect::<Vec<_>>(),
+            ),
+            (
+                "subscription.user_agent",
+                self.subscription.user_agent.iter().collect(),
+            ),
+            (
+                "subscription.app_version",
+                self.subscription.app_version.iter().collect(),
+            ),
+            (
+                "subscription.app_build",
+                self.subscription.app_build.iter().collect(),
+            ),
+            (
+                "subscription.core_version",
+                self.subscription.core_version.iter().collect(),
+            ),
+            ("device.hwid", self.device.hwid.iter().collect()),
+            ("device.machine_id", self.device.machine_id.iter().collect()),
+            ("device.hostname", self.device.hostname.iter().collect()),
+            ("device.os_name", self.device.os_name.iter().collect()),
+            ("device.os_version", self.device.os_version.iter().collect()),
+            (
+                "device.os_pretty_name",
+                self.device.os_pretty_name.iter().collect(),
+            ),
+            ("device.locale", vec![&self.device.locale]),
+        ];
+        for (key, values) in header_values {
+            if values.iter().any(|v| v.chars().any(char::is_control)) {
+                bail!("{key} must not contain control characters (line breaks, tabs, …)");
             }
         }
         for cron in &self.update.cron {

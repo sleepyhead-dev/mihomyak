@@ -14,7 +14,9 @@ pub fn detect(hwid: HwidFlags, content: &Content) -> Option<String> {
     if content.endpoints.is_empty() {
         return (!content.has_providers).then(|| "the subscription contains no proxies".into());
     }
-    if content.endpoints.iter().all(is_placeholder) {
+    // Placeholders next to proxy-providers are decoration: the real proxies live in
+    // the providers, which we cannot inspect.
+    if !content.has_providers && content.endpoints.iter().all(is_placeholder) {
         let names: Vec<&str> = content
             .endpoints
             .iter()
@@ -100,6 +102,9 @@ mod tests {
         );
         assert!(detect(HwidFlags::default(), &content(&[], false)).is_some());
         assert!(detect(HwidFlags::default(), &content(&[], true)).is_none());
+        // Remnawave-style info entry next to real proxy-providers is not a stub.
+        let info = content(&[("Expires 01.01", "0.0.0.0", 1)], true);
+        assert!(detect(HwidFlags::default(), &info).is_none());
     }
 
     #[test]

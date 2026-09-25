@@ -21,12 +21,7 @@ pub struct LocalTime {
 
 /// Local time of a unix timestamp according to the process time zone.
 pub fn local_time(unix: u64) -> LocalTime {
-    let t = unix as libc::time_t;
-    // SAFETY: zeroed tm is a valid out-parameter; localtime_r is thread-safe.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe {
-        libc::localtime_r(&t, &mut tm);
-    }
+    let tm = local_tm(unix);
     LocalTime {
         minute: tm.tm_min as u32,
         hour: tm.tm_hour as u32,
@@ -34,6 +29,28 @@ pub fn local_time(unix: u64) -> LocalTime {
         month: tm.tm_mon as u32 + 1,
         weekday: tm.tm_wday as u32,
     }
+}
+
+/// Offset of local time from UTC at `unix`, e.g. `+03:00` (logged at start so a
+/// missing `TZ` is obvious).
+pub fn utc_offset(unix: u64) -> String {
+    let offset = local_tm(unix).tm_gmtoff;
+    let sign = if offset < 0 { '-' } else { '+' };
+    let minutes = offset.unsigned_abs() / 60;
+    format!("{sign}{:02}:{:02}", minutes / 60, minutes % 60)
+}
+
+// musl deprecates `time_t` ahead of its 64-bit transition; it is 64-bit on every
+// target we build for.
+#[allow(deprecated)]
+fn local_tm(unix: u64) -> libc::tm {
+    let t = unix as libc::time_t;
+    // SAFETY: zeroed tm is a valid out-parameter; localtime_r is thread-safe.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::localtime_r(&t, &mut tm);
+    }
+    tm
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +61,8 @@ pub struct Cron {
     days: u32,
     months: u16,
     weekdays: u8,
-    /// Both day fields restricted: Vixie cron matches either of them.
+    /// Neither day field starts with `*`: Vixie cron matches either of them
+    /// (`*/2` counts as starred, as in Vixie cron).
     day_or: bool,
 }
 
@@ -52,13 +70,13 @@ impl std::str::FromStr for Cron {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        let expanded = match s.trim() {
+        let expanded = match s.trim().to_ascii_lowercase().as_str() {
             "@hourly" => "0 * * * *",
             "@daily" | "@midnight" => "0 0 * * *",
             "@weekly" => "0 0 * * 0",
             "@monthly" => "0 0 1 * *",
             "@yearly" | "@annually" => "0 0 1 1 *",
-            other => other,
+            _ => s.trim(),
         };
         let fields: Vec<&str> = expanded.split_whitespace().collect();
         let [min, hour, dom, mon, dow] = fields[..] else {
@@ -68,15 +86,19 @@ impl std::str::FromStr for Cron {
         let weekdays = field(dow, 0, 7, DAY_NAMES).with_context(|| ctx("weekday"))?;
         // 7 is Sunday too.
         let weekdays = (weekdays & 0x7f) | u64::from(weekdays & (1 << 7) != 0);
-        Ok(Self {
+        let cron = Self {
             source: s.trim().to_owned(),
             minutes: field(min, 0, 59, &[]).with_context(|| ctx("minute"))?,
             hours: field(hour, 0, 23, &[]).with_context(|| ctx("hour"))? as u32,
             days: field(dom, 1, 31, &[]).with_context(|| ctx("day"))? as u32,
             months: field(mon, 1, 12, MONTH_NAMES).with_context(|| ctx("month"))? as u16,
             weekdays: weekdays as u8,
-            day_or: dom != "*" && dow != "*",
-        })
+            day_or: !dom.starts_with('*') && !dow.starts_with('*'),
+        };
+        if !cron.can_match() {
+            bail!("cron {s:?} never matches (no such day in the selected months)");
+        }
+        Ok(cron)
     }
 }
 
@@ -133,6 +155,19 @@ impl Cron {
         &self.source
     }
 
+    /// Whether some calendar date satisfies the day-of-month/month fields
+    /// (day-of-week alone always matches eventually).
+    fn can_match(&self) -> bool {
+        const DAYS_IN_MONTH: [u32; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        if self.day_or {
+            return true;
+        }
+        (1..=12u32).any(|month| {
+            self.months & (1 << month) != 0
+                && (1..=DAYS_IN_MONTH[month as usize - 1]).any(|day| self.days & (1 << day) != 0)
+        })
+    }
+
     pub fn matches(&self, t: &LocalTime) -> bool {
         let day = self.days & (1 << t.day) != 0;
         let weekday = self.weekdays & (1 << t.weekday) != 0;
@@ -147,10 +182,11 @@ impl Cron {
             && day_ok
     }
 
-    /// First matching minute strictly after `after` (unix seconds), within a year.
+    /// First matching minute strictly after `after` (unix seconds), within four
+    /// years (so `29 2` finds the next leap day).
     pub fn next_after(&self, after: u64, local: impl Fn(u64) -> LocalTime) -> Option<u64> {
         let mut t = (after / 60 + 1) * 60;
-        let limit = t + 366 * 86_400;
+        let limit = t + 4 * 366 * 86_400;
         while t < limit {
             let lt = local(t);
             if self.hours & (1 << lt.hour) == 0 {
@@ -223,7 +259,39 @@ mod tests {
     }
 
     #[test]
+    fn starred_step_keeps_and_semantics() {
+        // Vixie cron: `*/2` counts as `*`, so this is "odd days that are Mondays".
+        let cron: Cron = "0 0 */2 * mon".parse().unwrap();
+        let next = cron.next_after(SEP_25_2026_2140Z, at_offset(0)).unwrap();
+        let lt = at_offset(0)(next);
+        assert_eq!((lt.weekday, lt.day % 2), (1, 1));
+    }
+
+    #[test]
+    fn leap_day_and_impossible_dates() {
+        let cron: Cron = "0 0 29 2 *".parse().unwrap();
+        let next = cron.next_after(SEP_25_2026_2140Z, at_offset(0)).unwrap();
+        assert_eq!(crate::util::fmt_timestamp(next), "2028-02-29T00:00:00Z");
+        assert!("0 0 31 2 *".parse::<Cron>().is_err());
+        assert!("0 0 31 4,6 *".parse::<Cron>().is_err());
+        assert!(
+            "0 0 31 2 mon".parse::<Cron>().is_ok(),
+            "day-or makes it possible"
+        );
+    }
+
+    #[test]
     fn aliases_and_errors() {
+        assert_eq!(
+            "@DAILY"
+                .parse::<Cron>()
+                .unwrap()
+                .next_after(0, at_offset(0)),
+            "@daily"
+                .parse::<Cron>()
+                .unwrap()
+                .next_after(0, at_offset(0))
+        );
         let daily: Cron = "@daily".parse().unwrap();
         let explicit: Cron = "0 0 * * *".parse().unwrap();
         let utc = at_offset(0);
@@ -248,5 +316,10 @@ mod tests {
     fn local_time_is_consistent() {
         let lt = local_time(SEP_25_2026_2140Z);
         assert!(lt.minute < 60 && lt.hour < 24 && (1..=12).contains(&lt.month));
+        let offset = utc_offset(SEP_25_2026_2140Z);
+        assert!(
+            offset.len() == 6 && offset.starts_with(['+', '-']),
+            "{offset}"
+        );
     }
 }
