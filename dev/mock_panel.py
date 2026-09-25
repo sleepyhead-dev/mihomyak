@@ -74,15 +74,15 @@ def yaml_config(proxies, remarks=None):
     if remarks is not None:
         for remark in remarks:
             names.append(remark)
-            lines += [f"  - name: {json.dumps(remark)}", "    type: vless", "    server: 0.0.0.0",
+            lines += [f"  - name: {json.dumps(remark, ensure_ascii=False)}", "    type: vless", "    server: 0.0.0.0",
                       "    port: 1", "    uuid: 00000000-0000-0000-0000-000000000000",
                       "    network: tcp", "    udp: true"]
     else:
         for name, link in proxies:
             names.append(name)
-            lines.append(f"  - {json.dumps(link_to_mihomo(name, link))}")
+            lines.append(f"  - {json.dumps(link_to_mihomo(name, link), ensure_ascii=False)}")
     lines += ["proxy-groups:", "  - name: '→ Remnawave'", "    type: select", "    proxies:"]
-    lines += [f"      - {json.dumps(n)}" for n in names]
+    lines += [f"      - {json.dumps(n, ensure_ascii=False)}" for n in names]
     lines += ["rules:", "  - MATCH,→ Remnawave", ""]
     return "\n".join(lines)
 
