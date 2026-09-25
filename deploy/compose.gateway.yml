@@ -1,0 +1,48 @@
+# Transparent gateway for other containers (recommended).
+#
+# mihomyak owns a network namespace with a TUN device; every container that joins
+# it (`network_mode: service:mihomyak`) is proxied transparently, DNS included.
+# No proxy settings inside the apps, no ports exposed to the LAN.
+#
+#   cp deploy/.env.example .env && $EDITOR .env
+#   docker compose -f deploy/compose.gateway.yml up -d
+#   docker compose -f deploy/compose.gateway.yml exec mihomyak mihomyak tui
+
+services:
+  mihomyak:
+    image: ghcr.io/sleepyhead-dev/mihomyak:latest
+    container_name: mihomyak
+    # Reported to the provider by the Happ emulation (X-Device-Model: <hostname>_<arch>).
+    hostname: ${MIHOMYAK_HOSTNAME:-home-server}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MIHOMYAK_GATEWAY: "1"
+    volumes:
+      - mihomyak-data:/data
+      # Optional fine-tuning (groups, filters, cron…): see examples/config.toml.
+      # - ./config.toml:/data/config.toml:ro
+      # Report the host's distro instead of the image's Alpine in device headers.
+      # - /etc/os-release:/etc/os-release:ro
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    # Ports of the apps below must be published here (they share this namespace).
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  # Example app routed through the gateway.
+  app:
+    image: nginx:alpine
+    network_mode: service:mihomyak
+    depends_on:
+      mihomyak:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mihomyak-data:
