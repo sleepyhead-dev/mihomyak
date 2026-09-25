@@ -26,6 +26,12 @@ pub struct Updater {
     pub emulation: Emulation,
     pub secret: String,
     client: http::Client,
+    crons: Vec<crate::schedule::Cron>,
+}
+
+pub struct Restored {
+    /// Unix time of the next scheduled update (may be in the past: overdue).
+    pub next_update: Option<u64>,
 }
 
 pub enum Outcome {
@@ -55,7 +61,6 @@ impl Updater {
             .map(Url::parse)
             .transpose()?;
         Ok(Self {
-            config,
             store,
             emulation,
             secret,
@@ -63,6 +68,13 @@ impl Updater {
                 proxy,
                 ..http::Client::default()
             },
+            crons: config
+                .update
+                .cron
+                .iter()
+                .map(|c| c.parse())
+                .collect::<Result<_>>()?,
+            config,
         })
     }
 
@@ -94,13 +106,23 @@ impl Updater {
         Ok((fetch, analysis))
     }
 
-    /// How long to wait after a successful update.
-    pub fn interval(&self, info: &ProviderInfo) -> Duration {
-        let interval = match self.config.subscription.interval {
-            Interval::Fixed(d) => d,
-            Interval::Auto => info.update_interval.unwrap_or(DEFAULT_INTERVAL),
-        };
-        interval.max(MIN_INTERVAL)
+    /// Unix time of the next scheduled update for a subscription fetched at
+    /// `fetched_at`: the earliest of the interval and every cron expression.
+    /// Times already in the past mean "overdue" (e.g. the host was off at 05:00).
+    /// `None` when only manual/start-up updates are configured.
+    pub fn next_update(&self, fetched_at: u64, info: &ProviderInfo) -> Option<u64> {
+        let by_interval = match self.config.update.interval {
+            Interval::Off => None,
+            Interval::Fixed(d) => Some(d),
+            Interval::Auto => Some(info.update_interval.unwrap_or(DEFAULT_INTERVAL)),
+        }
+        .map(|d| fetched_at + d.max(MIN_INTERVAL).as_secs());
+        let by_cron = self
+            .crons
+            .iter()
+            .filter_map(|c| c.next_after(fetched_at, crate::schedule::local_time))
+            .min();
+        by_interval.into_iter().chain(by_cron).min()
     }
 
     /// Fetches the subscription and writes a new config if it is usable.
@@ -152,6 +174,7 @@ impl Updater {
             format: content.format.as_str().to_owned(),
             proxies: content.endpoints.len(),
             url_override: meta.url_override,
+            next_update_at: meta.next_update_at,
         };
         self.store.save_meta(&meta)?;
         Ok(Outcome::Applied {
@@ -162,9 +185,8 @@ impl Updater {
     }
 
     /// Rebuilds the config from the cached body (current settings applied).
-    /// Returns the time left until the next scheduled update, or `None` when
-    /// there is no usable cache for the configured URL and client.
-    pub fn restore(&self) -> Result<Option<Duration>> {
+    /// `None` when there is no usable cache for the configured URL and client.
+    pub fn restore(&self) -> Result<Option<Restored>> {
         let (Some(meta), Some(body)) = (self.store.load_meta(), self.store.load_body()) else {
             return Ok(None);
         };
@@ -184,8 +206,19 @@ impl Updater {
             return Ok(None);
         };
         self.write_config(content)?;
-        let due = meta.fetched_at + self.interval(&analysis.info).as_secs();
-        Ok(Some(Duration::from_secs(due.saturating_sub(now_unix()))))
+        Ok(Some(Restored {
+            next_update: self.next_update(meta.fetched_at, &analysis.info),
+        }))
+    }
+
+    /// Records when the supervisor will update next (shown by `mihomyak status`).
+    pub fn record_next_update(&self, at: Option<u64>) {
+        if let Some(mut meta) = self.store.load_meta() {
+            meta.next_update_at = at;
+            if let Err(e) = self.store.save_meta(&meta) {
+                crate::warn!("could not save subscription metadata: {e:#}");
+            }
+        }
     }
 
     fn write_config(&self, content: &subscription::Content) -> Result<()> {
@@ -194,6 +227,9 @@ impl Updater {
             .mode()
             .unwrap_or_else(|| self.config.core.mode.clone());
         let built = crate::profile::build(content, &self.config, &self.secret, &mode)?;
+        for warning in &built.warnings {
+            crate::warn!("{warning}");
+        }
         let home = self.store.mihomo_home();
         if let Some(provider) = &built.provider {
             crate::util::write_atomic(&home.join(crate::profile::PROVIDER_FILE), provider)

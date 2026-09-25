@@ -11,8 +11,9 @@
 use anyhow::{Context, Result};
 use serde_norway::{Mapping, Value};
 
-use crate::config::Config;
+use crate::config::{Config, GroupType};
 use crate::emulation::ClientKind;
+use crate::pattern::{PatternSet, keep};
 use crate::subscription::{Content, Format};
 
 /// Provider file for link subscriptions, relative to the mihomo home directory.
@@ -132,6 +133,8 @@ pub struct Built {
     pub config_yaml: String,
     /// Contents of [`PROVIDER_FILE`] for link subscriptions.
     pub provider: Option<Vec<u8>>,
+    /// Things the user should know about (filters that emptied groups, …).
+    pub warnings: Vec<String>,
 }
 
 pub fn build(content: &Content, config: &Config, secret: &str, mode: &str) -> Result<Built> {
@@ -154,7 +157,11 @@ pub fn build(content: &Content, config: &Config, secret: &str, mode: &str) -> Re
     for key in STRIPPED_KEYS {
         map.remove(*key);
     }
+    let mut warnings = Vec::new();
+    apply_filter(map, config, &mut warnings);
     ensure_groups(map);
+    apply_custom_groups(map, config, &mut warnings);
+    prepend_rules(map, &config.rules.prepend);
     apply_managed(map, config);
     // Like FlClashX, the client owns the routing mode: Remnawave's default
     // template ships `mode: global`, which would route through GLOBAL → DIRECT.
@@ -171,7 +178,192 @@ pub fn build(content: &Content, config: &Config, secret: &str, mode: &str) -> Re
     Ok(Built {
         config_yaml: serde_norway::to_string(&root)?,
         provider,
+        warnings,
     })
+}
+
+fn name_of(proxy: &Value) -> Option<String> {
+    proxy.get("name").and_then(Value::as_str).map(str::to_owned)
+}
+
+fn inline_names(map: &Mapping) -> Vec<String> {
+    map.get("proxies")
+        .and_then(Value::as_sequence)
+        .into_iter()
+        .flatten()
+        .filter_map(name_of)
+        .collect()
+}
+
+fn provider_names(map: &Mapping) -> Vec<Value> {
+    map.get("proxy-providers")
+        .and_then(Value::as_mapping)
+        .into_iter()
+        .flat_map(|m| m.keys().cloned())
+        .collect()
+}
+
+/// `[filter]`: drops nodes from `proxies` and every group, and constrains
+/// proxy-providers (mihomo `filter` / `exclude-filter`) the same way.
+fn apply_filter(map: &mut Mapping, config: &Config, warnings: &mut Vec<String>) {
+    let include = PatternSet::new(&config.filter.include);
+    let exclude = PatternSet::new(&config.filter.exclude);
+    if include.is_empty() && exclude.is_empty() {
+        return;
+    }
+    let mut removed = std::collections::HashSet::new();
+    if let Some(proxies) = map.get_mut("proxies").and_then(Value::as_sequence_mut) {
+        proxies.retain(|p| match name_of(p) {
+            Some(name) if !keep(&name, &include, &exclude) => {
+                removed.insert(name);
+                false
+            }
+            _ => true,
+        });
+    }
+    let mut has_providers = false;
+    if let Some(providers) = map
+        .get_mut("proxy-providers")
+        .and_then(Value::as_mapping_mut)
+    {
+        for (name, provider) in providers.iter_mut() {
+            let Some(provider) = provider.as_mapping_mut() else {
+                continue;
+            };
+            has_providers = true;
+            for (key, set_) in [("filter", &include), ("exclude-filter", &exclude)] {
+                if set_.is_empty() {
+                    continue;
+                }
+                if provider.contains_key(key) {
+                    warnings.push(format!(
+                        "provider {} already has a {key}; replaced by [filter]",
+                        name.as_str().unwrap_or("?")
+                    ));
+                }
+                set(provider, key, set_.to_regex());
+            }
+        }
+    }
+    if let Some(groups) = map.get_mut("proxy-groups").and_then(Value::as_sequence_mut) {
+        for group in groups.iter_mut().filter_map(Value::as_mapping_mut) {
+            let uses_providers = group.contains_key("use") || group.contains_key("include-all");
+            let Some(members) = group.get_mut("proxies").and_then(Value::as_sequence_mut) else {
+                continue;
+            };
+            members.retain(|m| m.as_str().is_none_or(|n| !removed.contains(n)));
+            if members.is_empty() && !uses_providers {
+                // Keep references to the group valid.
+                members.push(Value::from("DIRECT"));
+                let name = group.get("name").and_then(Value::as_str).unwrap_or("?");
+                warnings.push(format!(
+                    "[filter] left group {name:?} without nodes (DIRECT)"
+                ));
+            }
+        }
+    }
+    if !removed.is_empty() {
+        crate::debug!("[filter] dropped {} node(s)", removed.len());
+    }
+    if inline_names(map).is_empty() && !has_providers {
+        warnings.push("[filter] removed every node of the subscription".into());
+    }
+}
+
+/// `[[groups]]`: user-defined auto-switching groups, listed first.
+fn apply_custom_groups(map: &mut Mapping, config: &Config, warnings: &mut Vec<String>) {
+    if config.groups.is_empty() {
+        return;
+    }
+    let names = inline_names(map);
+    let providers = provider_names(map);
+    let mut built = Vec::with_capacity(config.groups.len());
+    let mut defaults = Vec::new();
+    for g in &config.groups {
+        let patterns = PatternSet::new(&g.nodes);
+        let mut members: Vec<String> = Vec::new();
+        if patterns.is_empty() {
+            members.clone_from(&names);
+        } else {
+            // Pattern order is priority order (matters for fallback).
+            for pattern in patterns.patterns() {
+                for name in names.iter().filter(|n| pattern.matches(n)) {
+                    if !members.contains(name) {
+                        members.push(name.clone());
+                    }
+                }
+            }
+        }
+        let mut group = Mapping::new();
+        set(&mut group, "name", g.name.as_str());
+        set(&mut group, "type", g.kind.as_mihomo());
+        if !providers.is_empty() {
+            set(&mut group, "use", Value::Sequence(providers.clone()));
+            if !patterns.is_empty() {
+                set(&mut group, "filter", patterns.to_regex());
+            }
+        } else if members.is_empty() {
+            warnings.push(format!("group {:?}: no node matches {:?}", g.name, g.nodes));
+            members.push("DIRECT".into());
+        }
+        set(
+            &mut group,
+            "proxies",
+            Value::Sequence(members.iter().map(|m| Value::from(m.as_str())).collect()),
+        );
+        if g.kind != GroupType::Select {
+            set(&mut group, "url", g.url.as_str());
+            set(&mut group, "interval", g.interval.0.as_secs());
+            // Failover needs live health data even while the group is idle.
+            set(&mut group, "lazy", false);
+        }
+        if g.kind == GroupType::UrlTest {
+            set(&mut group, "tolerance", g.tolerance);
+        }
+        built.push(Value::Mapping(group));
+        if g.default {
+            defaults.push((g.name.clone(), members));
+        }
+    }
+    let groups = map
+        .entry(Value::from("proxy-groups"))
+        .or_insert_with(|| Value::Sequence(Vec::new()));
+    let Some(groups) = groups.as_sequence_mut() else {
+        return;
+    };
+    // Offer default groups first in every selector that holds their nodes, so a
+    // fresh start picks them (mihomo selects the first member).
+    for existing in groups.iter_mut().filter_map(Value::as_mapping_mut) {
+        if existing.get("type").and_then(Value::as_str) != Some("select") {
+            continue;
+        }
+        let uses_providers = existing.contains_key("use");
+        let Some(members) = existing.get_mut("proxies").and_then(Value::as_sequence_mut) else {
+            continue;
+        };
+        for (name, nodes) in defaults.iter().rev() {
+            let relevant = uses_providers
+                || members
+                    .iter()
+                    .any(|m| m.as_str().is_some_and(|m| nodes.iter().any(|n| n == m)));
+            if relevant && !members.iter().any(|m| m.as_str() == Some(name.as_str())) {
+                members.insert(0, Value::from(name.as_str()));
+            }
+        }
+    }
+    groups.splice(0..0, built);
+}
+
+fn prepend_rules(map: &mut Mapping, extra: &[String]) {
+    if extra.is_empty() {
+        return;
+    }
+    let rules = map
+        .entry(Value::from("rules"))
+        .or_insert_with(|| Value::Sequence(Vec::new()));
+    if let Some(rules) = rules.as_sequence_mut() {
+        rules.splice(0..0, extra.iter().map(|r| Value::from(r.as_str())));
+    }
 }
 
 fn apply_managed(map: &mut Mapping, config: &Config) {
@@ -430,6 +622,126 @@ rules:
         let v = built(&parsed(REMNAWAVE), &Config::default());
         assert_eq!(v["proxy-groups"].as_sequence().unwrap().len(), 1);
         assert_eq!(v["rules"][0].as_str(), Some("MATCH,→ Remnawave"));
+    }
+
+    const THREE_NODES: &str = r#"
+proxies:
+  - {name: "🇳🇱 NL 1", type: ss, server: nl1.example, port: 1, cipher: aes-128-gcm, password: p}
+  - {name: "🇩🇪 DE 1", type: ss, server: de1.example, port: 1, cipher: aes-128-gcm, password: p}
+  - {name: "🇷🇺 RU info", type: ss, server: ru.example, port: 1, cipher: aes-128-gcm, password: p}
+proxy-groups:
+  - {name: Main, type: select, proxies: ["🇳🇱 NL 1", "🇩🇪 DE 1", "🇷🇺 RU info"]}
+  - {name: RU only, type: select, proxies: ["🇷🇺 RU info"]}
+rules: ["MATCH,Main"]
+"#;
+
+    fn names(v: &Value) -> Vec<String> {
+        v.as_sequence()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                p.as_str()
+                    .or_else(|| p["name"].as_str())
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn filter_drops_nodes_everywhere() {
+        let config: Config = toml::from_str("[filter]\nexclude = [\"*ru*\"]").unwrap();
+        let built = build(&parsed(THREE_NODES), &config, "s", "rule").unwrap();
+        let v: Value = serde_norway::from_str(&built.config_yaml).unwrap();
+        assert_eq!(names(&v["proxies"]), ["🇳🇱 NL 1", "🇩🇪 DE 1"]);
+        assert_eq!(
+            names(&v["proxy-groups"][0]["proxies"]),
+            ["🇳🇱 NL 1", "🇩🇪 DE 1"]
+        );
+        assert_eq!(names(&v["proxy-groups"][1]["proxies"]), ["DIRECT"]);
+        assert!(built.warnings[0].contains("RU only"));
+
+        let config: Config = toml::from_str("[filter]\ninclude = [\"*nl*\"]").unwrap();
+        let v = built_v(THREE_NODES, &config);
+        assert_eq!(names(&v["proxies"]), ["🇳🇱 NL 1"]);
+    }
+
+    fn built_v(yaml: &str, config: &Config) -> Value {
+        serde_norway::from_str(
+            &build(&parsed(yaml), config, "s", "rule")
+                .unwrap()
+                .config_yaml,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn filter_constrains_link_providers() {
+        let config: Config =
+            toml::from_str("[filter]\ninclude = [\"*NL*\"]\nexclude = [\"*(test)*\"]").unwrap();
+        let content = body::parse(b"trojan://p@h.example:443#NL\n", None).unwrap();
+        let v: Value =
+            serde_norway::from_str(&build(&content, &config, "s", "rule").unwrap().config_yaml)
+                .unwrap();
+        let provider = &v["proxy-providers"]["subscription"];
+        assert_eq!(provider["filter"].as_str(), Some("(?i)^(?:.*NL.*)$"));
+        assert_eq!(
+            provider["exclude-filter"].as_str(),
+            Some(r"(?i)^(?:.*\(test\).*)$")
+        );
+    }
+
+    #[test]
+    fn custom_auto_group_becomes_default() {
+        let config: Config = toml::from_str(
+            r#"
+            [[groups]]
+            name = "Auto"
+            type = "fallback"
+            nodes = ["*DE*", "*NL*"]
+            default = true
+            [rules]
+            prepend = ["DOMAIN-SUFFIX,lan,DIRECT"]
+            "#,
+        )
+        .unwrap();
+        let v = built_v(THREE_NODES, &config);
+        let auto = &v["proxy-groups"][0];
+        assert_eq!(auto["name"].as_str(), Some("Auto"));
+        assert_eq!(auto["type"].as_str(), Some("fallback"));
+        assert_eq!(
+            names(&auto["proxies"]),
+            ["🇩🇪 DE 1", "🇳🇱 NL 1"],
+            "pattern order = priority"
+        );
+        assert_eq!(auto["interval"].as_u64(), Some(180));
+        assert_eq!(auto["lazy"].as_bool(), Some(false));
+        let main = &v["proxy-groups"][1];
+        assert_eq!(names(&main["proxies"])[0], "Auto");
+        assert_eq!(
+            names(&v["proxy-groups"][2]["proxies"]),
+            ["🇷🇺 RU info"],
+            "unrelated selector untouched"
+        );
+        assert_eq!(v["rules"][0].as_str(), Some("DOMAIN-SUFFIX,lan,DIRECT"));
+        assert_eq!(v["rules"][1].as_str(), Some("MATCH,Main"));
+    }
+
+    #[test]
+    fn custom_group_over_link_provider() {
+        let config: Config = toml::from_str(
+            "[[groups]]\nname = \"Fast\"\ntype = \"url-test\"\nnodes = [\"*NL*\"]\ndefault = true",
+        )
+        .unwrap();
+        let content = body::parse(b"trojan://p@h.example:443#NL\n", None).unwrap();
+        let v: Value =
+            serde_norway::from_str(&build(&content, &config, "s", "rule").unwrap().config_yaml)
+                .unwrap();
+        let fast = &v["proxy-groups"][0];
+        assert_eq!(fast["use"][0].as_str(), Some("subscription"));
+        assert_eq!(fast["filter"].as_str(), Some("(?i)^(?:.*NL.*)$"));
+        assert_eq!(fast["tolerance"].as_u64(), Some(50));
+        assert_eq!(v["proxy-groups"][1]["proxies"][0].as_str(), Some("Fast"));
     }
 
     #[test]

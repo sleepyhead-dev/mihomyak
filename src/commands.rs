@@ -281,6 +281,18 @@ fn status(config: Config) -> Result<ExitCode> {
                     ))
                 );
             }
+            if let (Some(at), Some(_)) = (meta.next_update_at, store.supervisor_pid()) {
+                let when = if at <= now_unix() {
+                    "now".to_owned()
+                } else {
+                    format!(
+                        "{} (in {})",
+                        fmt_timestamp(at),
+                        fmt_duration(Duration::from_secs(at - now_unix()))
+                    )
+                };
+                println!("{:<13} {when}", "next update:");
+            }
             if let Some(error) = &meta.last_error {
                 println!(
                     "{:<13} {} at {}",

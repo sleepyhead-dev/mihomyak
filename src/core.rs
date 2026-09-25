@@ -74,6 +74,30 @@ impl CoreProcess {
     }
 }
 
+/// Geodata file names mihomo looks for in its home directory.
+const GEODATA_FILES: &[&str] = &[
+    "geoip.metadb",
+    "geosite.dat",
+    "geoip.dat",
+    "GeoLite2-ASN.mmdb",
+    "ASN.mmdb",
+];
+
+/// Copies bundled geodata into mihomo's home when absent. mihomo would otherwise
+/// download it from github.com on first use of a GEOIP/GEOSITE rule and refuse to
+/// start if that download fails.
+pub fn seed_geodata(src: &Path, home: &Path) {
+    for name in GEODATA_FILES {
+        let (from, to) = (src.join(name), home.join(name));
+        if from.is_file() && !to.exists() {
+            match std::fs::copy(&from, &to) {
+                Ok(_) => crate::info!("seeded {name} from {}", src.display()),
+                Err(e) => crate::warn!("could not copy {}: {e}", from.display()),
+            }
+        }
+    }
+}
+
 /// `core.bin` as a path, else found in PATH, else `<data>/bin/mihomo`.
 pub fn resolve_bin(config: &Config, store: &Store) -> PathBuf {
     let bin = &config.core.bin;

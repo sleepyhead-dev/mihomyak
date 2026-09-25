@@ -15,6 +15,11 @@ use crate::emulation::ClientKind;
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub subscription: Subscription,
+    pub update: Update,
+    pub filter: Filter,
+    /// Custom proxy groups (auto-switching between chosen nodes).
+    pub groups: Vec<Group>,
+    pub rules: Rules,
     pub device: Device,
     pub core: Core,
     pub gateway: Gateway,
@@ -43,8 +48,6 @@ pub struct Subscription {
     pub user_agent: Option<String>,
     /// Extra `Name: value` headers; a name that already exists is replaced in place.
     pub headers: Vec<String>,
-    /// `auto` (provider's `profile-update-interval`, else 24h) or a duration like `12h`.
-    pub interval: Interval,
     /// Fetch through an HTTP proxy (`http://host:port`, tunnelled with CONNECT).
     pub proxy: Option<String>,
     /// Apply configs even when they look like a provider stub.
@@ -61,18 +64,123 @@ impl Default for Subscription {
             core_version: None,
             user_agent: None,
             headers: Vec::new(),
-            interval: Interval::Auto,
             proxy: None,
             accept_stub: false,
         }
     }
 }
 
+/// When the subscription is refreshed. All triggers combine: the earliest wins.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Update {
+    /// `auto` (provider's `profile-update-interval`, else 24h), `off`, or e.g. `12h`.
+    pub interval: Interval,
+    /// Cron expressions in local time (`TZ`), e.g. `["0 5 * * *"]`.
+    pub cron: Vec<String>,
+    /// Refetch at every start instead of reusing a cache that is not yet due.
+    pub on_start: bool,
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Interval {
     #[default]
     Auto,
+    Off,
     Fixed(Duration),
+}
+
+/// Node whitelist/blacklist by name (globs: `*`, `?`; case-insensitive).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Filter {
+    /// Keep only nodes matching one of these (empty: keep all).
+    pub include: Vec<String>,
+    /// Drop nodes matching one of these.
+    pub exclude: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GroupType {
+    /// First alive node in pattern order.
+    Fallback,
+    /// Lowest latency node.
+    UrlTest,
+    /// Spread connections over nodes.
+    LoadBalance,
+    /// Manual choice.
+    Select,
+}
+
+impl GroupType {
+    pub fn as_mihomo(self) -> &'static str {
+        match self {
+            GroupType::Fallback => "fallback",
+            GroupType::UrlTest => "url-test",
+            GroupType::LoadBalance => "load-balance",
+            GroupType::Select => "select",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Group {
+    pub name: String,
+    #[serde(rename = "type", default = "default_group_type")]
+    pub kind: GroupType,
+    /// Name patterns in priority order (empty: every node).
+    #[serde(default)]
+    pub nodes: Vec<String>,
+    #[serde(default = "default_health_url")]
+    pub url: String,
+    #[serde(default = "default_health_interval")]
+    pub interval: HumanDuration,
+    /// url-test: switch only when the new node is this many ms faster.
+    #[serde(default = "default_tolerance")]
+    pub tolerance: u32,
+    /// Offer this group first in the subscription's selector groups, so it is
+    /// the default choice.
+    #[serde(default)]
+    pub default: bool,
+}
+
+fn default_group_type() -> GroupType {
+    GroupType::Fallback
+}
+
+fn default_health_url() -> String {
+    "https://www.gstatic.com/generate_204".into()
+}
+
+fn default_health_interval() -> HumanDuration {
+    HumanDuration(Duration::from_secs(180))
+}
+
+fn default_tolerance() -> u32 {
+    50
+}
+
+/// A duration written as `90s`, `3m`, `1h`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HumanDuration(pub Duration);
+
+impl<'de> Deserialize<'de> for HumanDuration {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(de)?;
+        crate::util::parse_duration(&raw)
+            .map(HumanDuration)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Rules {
+    /// mihomo rules placed before the subscription's own, e.g.
+    /// `"DOMAIN-SUFFIX,lan,DIRECT"` or `"DOMAIN-SUFFIX,example.com,Auto"`.
+    pub prepend: Vec<String>,
 }
 
 impl<'de> Deserialize<'de> for Interval {
@@ -88,6 +196,9 @@ impl std::str::FromStr for Interval {
     fn from_str(s: &str) -> Result<Self> {
         if s.eq_ignore_ascii_case("auto") {
             return Ok(Self::Auto);
+        }
+        if s.eq_ignore_ascii_case("off") {
+            return Ok(Self::Off);
         }
         let d = crate::util::parse_duration(s)?;
         if d < Duration::from_secs(60) {
@@ -153,6 +264,9 @@ pub struct Core {
     pub mode: String,
     /// Go runtime soft memory limit for mihomo (`GOMEMLIMIT`, e.g. `64MiB`).
     pub memory_limit: Option<String>,
+    /// Directory with bundled geodata (geoip.metadb, geosite.dat, …) copied into
+    /// mihomo's home on start when missing, so GEOIP/GEOSITE rules work offline.
+    pub geodata_dir: Option<PathBuf>,
 }
 
 impl Default for Core {
@@ -167,6 +281,7 @@ impl Default for Core {
             log_level: "warning".into(),
             mode: "rule".into(),
             memory_limit: None,
+            geodata_dir: None,
         }
     }
 }
@@ -253,14 +368,28 @@ impl Config {
         if let Some(v) = env("MIHOMYAK_USER_AGENT") {
             sub.user_agent = Some(v);
         }
-        if let Some(v) = env("MIHOMYAK_UPDATE_INTERVAL") {
-            sub.interval = v.parse().context("MIHOMYAK_UPDATE_INTERVAL")?;
-        }
+
         if let Some(v) = env("MIHOMYAK_FETCH_PROXY") {
             sub.proxy = Some(v).filter(|s| !s.is_empty());
         }
         if let Some(v) = flag("MIHOMYAK_ACCEPT_STUB")? {
             sub.accept_stub = v;
+        }
+        let update = &mut self.update;
+        if let Some(v) = env("MIHOMYAK_UPDATE_INTERVAL") {
+            update.interval = v.parse().context("MIHOMYAK_UPDATE_INTERVAL")?;
+        }
+        if let Some(v) = env("MIHOMYAK_UPDATE_CRON") {
+            update.cron = split_list(&v);
+        }
+        if let Some(v) = flag("MIHOMYAK_UPDATE_ON_START")? {
+            update.on_start = v;
+        }
+        if let Some(v) = env("MIHOMYAK_INCLUDE") {
+            self.filter.include = split_list(&v);
+        }
+        if let Some(v) = env("MIHOMYAK_EXCLUDE") {
+            self.filter.exclude = split_list(&v);
         }
         let dev = &mut self.device;
         if let Some(v) = env("MIHOMYAK_MACHINE_ID") {
@@ -297,6 +426,9 @@ impl Config {
         if let Some(v) = env("MIHOMYAK_LOG_LEVEL") {
             core.log_level = v;
         }
+        if let Some(v) = env("MIHOMYAK_GEODATA_DIR") {
+            core.geodata_dir = Some(PathBuf::from(v)).filter(|p| !p.as_os_str().is_empty());
+        }
         if let Some(v) = env("MIHOMYAK_MEMORY_LIMIT") {
             core.memory_limit = Some(v).filter(|s| !s.is_empty());
         }
@@ -321,6 +453,21 @@ impl Config {
                 bail!("subscription.headers entry {header:?} must look like \"Name: value\"");
             }
         }
+        for cron in &self.update.cron {
+            cron.parse::<crate::schedule::Cron>()?;
+        }
+        let mut names = std::collections::HashSet::new();
+        for group in &self.groups {
+            if group.name.trim().is_empty() || !names.insert(group.name.as_str()) {
+                bail!(
+                    "[[groups]] names must be non-empty and unique ({:?})",
+                    group.name
+                );
+            }
+            if ["DIRECT", "REJECT", "GLOBAL", "PROXY", "AUTO"].contains(&group.name.as_str()) {
+                bail!("[[groups]] name {:?} is reserved", group.name);
+            }
+        }
         if !is_mode(&self.core.mode) {
             bail!("core.mode must be rule, global or direct");
         }
@@ -335,6 +482,16 @@ impl Config {
             "no subscription URL: set MIHOMYAK_SUB_URL or [subscription] url in the config file",
         )
     }
+}
+
+/// Env lists are `;`-separated (node names may contain commas).
+fn split_list(value: &str) -> Vec<String> {
+    value
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 pub fn is_mode(mode: &str) -> bool {
@@ -379,8 +536,25 @@ mod tests {
             [subscription]
             url = "https://sub.example.com/abc"
             client = "koala"
-            interval = "6h"
             headers = ["X-Extra: 1"]
+
+            [update]
+            interval = "6h"
+            cron = ["0 5 * * *"]
+            on_start = true
+
+            [filter]
+            exclude = ["*Россия*"]
+
+            [[groups]]
+            name = "Auto NL/DE"
+            type = "url-test"
+            nodes = ["*NL*", "*DE*"]
+            interval = "5m"
+            default = true
+
+            [rules]
+            prepend = ["DOMAIN-SUFFIX,lan,DIRECT"]
 
             [device]
             machine_id = "0d0af05ee8fd4dc29275718f2ce4dff1"
@@ -400,9 +574,17 @@ mod tests {
         .unwrap();
         assert_eq!(config.subscription.client, ClientKind::Koala);
         assert_eq!(
-            config.subscription.interval,
+            config.update.interval,
             Interval::Fixed(Duration::from_secs(6 * 3600))
         );
+        assert!(config.update.on_start);
+        assert_eq!(config.groups[0].kind, GroupType::UrlTest);
+        assert_eq!(
+            config.groups[0].interval,
+            HumanDuration(Duration::from_secs(300))
+        );
+        assert_eq!(config.groups[0].tolerance, 50);
+        assert_eq!(config.filter.exclude, ["*Россия*"]);
         assert_eq!(config.core.mixed_port, 7891);
         assert!(config.gateway.enable);
         assert_eq!(config.mihomo["ipv6"].as_bool(), Some(true));
@@ -412,7 +594,12 @@ mod tests {
     #[test]
     fn rejects_unknown_keys_and_bad_values() {
         assert!(toml::from_str::<Config>("[subscription]\nurll = \"x\"").is_err());
-        assert!(toml::from_str::<Config>("[subscription]\ninterval = \"10s\"").is_err());
+        assert!(toml::from_str::<Config>("[update]\ninterval = \"10s\"").is_err());
+        let dup: Config =
+            toml::from_str("[[groups]]\nname = \"A\"\n[[groups]]\nname = \"A\"").unwrap();
+        assert!(dup.validate().is_err());
+        let bad_cron: Config = toml::from_str("[update]\ncron = [\"61 * * * *\"]").unwrap();
+        assert!(bad_cron.validate().is_err());
         assert!(toml::from_str::<Config>("[subscription]\nclient = \"hiddify\"").is_err());
     }
 
@@ -425,6 +612,8 @@ mod tests {
             ("MIHOMYAK_GATEWAY", "true"),
             ("MIHOMYAK_UPDATE_INTERVAL", "auto"),
             ("MIHOMYAK_MIXED_PORT", "1080"),
+            ("MIHOMYAK_UPDATE_CRON", "0 5 * * *; 30 17 * * *"),
+            ("MIHOMYAK_EXCLUDE", "*test*;*Россия, Москва*"),
         ]
         .into();
         config
@@ -437,6 +626,8 @@ mod tests {
         assert_eq!(config.subscription.client, ClientKind::Koala);
         assert!(config.gateway.enable);
         assert_eq!(config.core.mixed_port, 1080);
+        assert_eq!(config.update.cron, ["0 5 * * *", "30 17 * * *"]);
+        assert_eq!(config.filter.exclude, ["*test*", "*Россия, Москва*"]);
 
         let bad = |k: &'static str, v: &'static str| {
             Config::default()

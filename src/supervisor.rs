@@ -21,6 +21,7 @@ use crate::api::Api;
 use crate::config::Config;
 use crate::core::{self, CoreProcess};
 use crate::updater::{self, Outcome, Updater};
+use crate::util::now_unix;
 
 const STOP_GRACE: Duration = Duration::from_secs(10);
 const MAX_RESTART_BACKOFF: Duration = Duration::from_secs(60);
@@ -55,7 +56,8 @@ struct Supervisor {
     bin: std::path::PathBuf,
     core: Option<CoreProcess>,
     events: mpsc::Receiver<Event>,
-    next_update: Instant,
+    /// Unix time of the next subscription update (`None`: only on demand).
+    next_update: Option<u64>,
     update_failures: u32,
     restart_at: Option<Instant>,
     restart_backoff: Duration,
@@ -89,7 +91,7 @@ impl Supervisor {
             bin,
             core: None,
             events: rx,
-            next_update: Instant::now(),
+            next_update: Some(now_unix()),
             update_failures: 0,
             restart_at: None,
             restart_backoff: Duration::from_secs(1),
@@ -111,15 +113,12 @@ impl Supervisor {
         if !self.prepare()? {
             return Ok(());
         }
+        if let Some(dir) = &self.updater.config.core.geodata_dir {
+            core::seed_geodata(dir, &self.updater.store.mihomo_home());
+        }
         self.start_core()?;
         loop {
-            let deadline = self
-                .restart_at
-                .map_or(self.next_update, |r| r.min(self.next_update));
-            match self
-                .events
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            {
+            match self.events.recv_timeout(self.wait_time()) {
                 Ok(Event::Stop) | Err(RecvTimeoutError::Disconnected) => break,
                 Ok(Event::Update) => {
                     crate::info!("update requested");
@@ -127,15 +126,14 @@ impl Supervisor {
                 }
                 Ok(Event::Child) => self.reap(),
                 Err(RecvTimeoutError::Timeout) => {
-                    let now = Instant::now();
-                    if self.restart_at.is_some_and(|at| at <= now) {
+                    if self.restart_at.is_some_and(|at| at <= Instant::now()) {
                         self.restart_at = None;
                         if let Err(e) = self.start_core() {
                             crate::error!("{e:#}");
                             self.schedule_restart();
                         }
                     }
-                    if self.next_update <= now {
+                    if self.next_update.is_some_and(|at| at <= now_unix()) {
                         self.update();
                     }
                 }
@@ -152,19 +150,25 @@ impl Supervisor {
     /// if there is one (like the real clients, no refetch until it is due),
     /// otherwise fetch until success. Returns `false` if asked to stop meanwhile.
     fn prepare(&mut self) -> Result<bool> {
-        if let Some(due_in) = self.updater.restore()? {
+        if let Some(restored) = self.updater.restore()? {
+            // Start on the cache right away; `on_start` refreshes it immediately after.
+            let next = if self.updater.config.update.on_start {
+                Some(now_unix())
+            } else {
+                restored.next_update
+            };
             crate::info!(
-                "using the cached subscription, next update in {}",
-                crate::util::fmt_duration(due_in)
+                "using the cached subscription; next update {}",
+                describe_next(next)
             );
-            self.next_update = Instant::now() + due_in;
+            self.set_next_update(next);
             return Ok(true);
         }
         loop {
             if self.update() {
                 return Ok(true);
             }
-            let wait = self.next_update.saturating_duration_since(Instant::now());
+            let wait = self.wait_time();
             crate::info!(
                 "no usable subscription yet, retrying in {}",
                 crate::util::fmt_duration(wait)
@@ -185,13 +189,13 @@ impl Supervisor {
                 proxies,
             }) => {
                 self.update_failures = 0;
-                let interval = self.updater.interval(&info);
-                self.next_update = Instant::now() + interval;
+                let next = self.updater.next_update(now_unix(), &info);
+                self.set_next_update(next);
                 crate::info!(
-                    "subscription {}: {}; next update in {}",
+                    "subscription {}: {}; next update {}",
                     if changed { "updated" } else { "unchanged" },
                     updater::describe(&info, proxies),
-                    crate::util::fmt_duration(interval)
+                    describe_next(next)
                 );
                 if let Some(announce) = &info.announce {
                     crate::info!("provider announcement: {announce}");
@@ -217,8 +221,28 @@ impl Supervisor {
     fn schedule_retry(&mut self) {
         self.update_failures += 1;
         let backoff = Duration::from_secs(60) * 2u32.saturating_pow(self.update_failures - 1);
-        let interval = self.updater.interval(&Default::default());
-        self.next_update = Instant::now() + backoff.min(MAX_RETRY_BACKOFF).min(interval);
+        self.set_next_update(Some(now_unix() + backoff.min(MAX_RETRY_BACKOFF).as_secs()));
+    }
+
+    fn set_next_update(&mut self, at: Option<u64>) {
+        self.next_update = at;
+        self.updater.record_next_update(at);
+    }
+
+    /// Time until the earliest pending event (update or core restart).
+    fn wait_time(&self) -> Duration {
+        let update = self
+            .next_update
+            .map(|at| Duration::from_secs(at.saturating_sub(now_unix())));
+        let restart = self
+            .restart_at
+            .map(|at| at.saturating_duration_since(Instant::now()));
+        // Wake at least hourly: wall-clock jumps (NTP after boot) must not strand a cron run.
+        [update, restart, Some(Duration::from_secs(3600))]
+            .into_iter()
+            .flatten()
+            .min()
+            .unwrap_or_default()
     }
 
     fn start_core(&mut self) -> Result<()> {
@@ -229,7 +253,56 @@ impl Supervisor {
         }
         let home = self.updater.store.mihomo_home();
         self.core = Some(CoreProcess::spawn(&self.bin, &home, &self.updater.config)?);
+        self.select_default_groups();
         Ok(())
+    }
+
+    /// `[[groups]] default = true`: make selectors use these groups. mihomo
+    /// restores the previous choice from cache.db (store-selected), so the default
+    /// is applied explicitly whenever the core starts or gets a new subscription.
+    fn select_default_groups(&self) {
+        let defaults: Vec<&str> = self
+            .updater
+            .config
+            .groups
+            .iter()
+            .filter(|g| g.default)
+            .map(|g| g.name.as_str())
+            .collect();
+        if defaults.is_empty() {
+            return;
+        }
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let snapshot = loop {
+            match self.api.snapshot() {
+                Ok(s) if !s.groups.is_empty() => break s,
+                _ if Instant::now() >= deadline => {
+                    crate::warn!("mihomo API not ready; default groups not selected");
+                    return;
+                }
+                _ => std::thread::sleep(Duration::from_millis(200)),
+            }
+        };
+        for group in snapshot
+            .groups
+            .iter()
+            .filter(|g| g.selectable() && g.name != "GLOBAL")
+        {
+            let Some(default) = group
+                .members
+                .iter()
+                .find(|m| defaults.contains(&m.as_str()))
+            else {
+                continue;
+            };
+            if group.now.as_ref() == Some(default) {
+                continue;
+            }
+            match self.api.select(&group.name, default) {
+                Ok(()) => crate::info!("{} → {default} (default group)", group.name),
+                Err(e) => crate::warn!("could not select {default} in {}: {e:#}", group.name),
+            }
+        }
     }
 
     /// Applies the freshly written config: hot reload, or restart as a fallback.
@@ -239,7 +312,10 @@ impl Supervisor {
         }
         let path = self.updater.store.mihomo_config();
         match self.api.reload(&path) {
-            Ok(()) => crate::info!("mihomo reloaded the new config"),
+            Ok(()) => {
+                crate::info!("mihomo reloaded the new config");
+                self.select_default_groups();
+            }
             Err(e) => {
                 crate::warn!("hot reload failed ({e:#}); restarting mihomo");
                 if let Some(core) = self.core.take() {
@@ -282,6 +358,18 @@ impl Supervisor {
         );
         self.restart_at = Some(Instant::now() + self.restart_backoff);
         self.restart_backoff = (self.restart_backoff * 2).min(MAX_RESTART_BACKOFF);
+    }
+}
+
+fn describe_next(at: Option<u64>) -> String {
+    match at {
+        None => "on demand only (interval off, no cron)".into(),
+        Some(at) if at <= now_unix() => "now (overdue)".into(),
+        Some(at) => format!(
+            "at {} (in {})",
+            crate::util::fmt_timestamp(at),
+            crate::util::fmt_duration(Duration::from_secs(at - now_unix()))
+        ),
     }
 }
 

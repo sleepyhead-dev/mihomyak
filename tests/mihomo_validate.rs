@@ -18,12 +18,16 @@ fn mihomo() -> Option<PathBuf> {
 }
 
 fn validate(name: &str, body: &[u8], gateway: bool) {
+    let mut config = Config::default();
+    config.gateway.enable = gateway;
+    validate_with(name, body, &config);
+}
+
+fn validate_with(name: &str, body: &[u8], config: &Config) {
     let Some(bin) = mihomo() else { return };
     let content = body::parse(body, None).unwrap_or_else(|e| panic!("{name}: {e}"));
     assert!(content.notes.is_empty(), "{name}: {:?}", content.notes);
-    let mut config = Config::default();
-    config.gateway.enable = gateway;
-    let built = mihomyak::profile::build(&content, &config, "secret", "rule").unwrap();
+    let built = mihomyak::profile::build(&content, config, "secret", "rule").unwrap();
     let home = tempfile::tempdir().unwrap();
     std::fs::write(home.path().join("config.yaml"), &built.config_yaml).unwrap();
     if let Some(provider) = &built.provider {
@@ -81,5 +85,43 @@ fn base64_links() {
         "links",
         include_bytes!("fixtures/subscriptions/links.b64.txt"),
         false,
+    );
+}
+
+const NODE_SETTINGS: &str = r#"
+[filter]
+exclude = ["*SS*"]
+
+[[groups]]
+name = "Auto EU"
+type = "fallback"
+nodes = ["*DE*", "*NL*"]
+default = true
+
+[[groups]]
+name = "Fastest"
+type = "url-test"
+
+[rules]
+prepend = ["DOMAIN-SUFFIX,lan,DIRECT", "DOMAIN-SUFFIX,example.org,Fastest"]
+"#;
+
+#[test]
+fn filters_groups_and_rules_on_xray_json() {
+    let config: Config = toml::from_str(NODE_SETTINGS).unwrap();
+    validate_with(
+        "xray+nodes",
+        include_bytes!("fixtures/subscriptions/remnawave-xray.json"),
+        &config,
+    );
+}
+
+#[test]
+fn filters_groups_and_rules_on_links() {
+    let config: Config = toml::from_str(NODE_SETTINGS).unwrap();
+    validate_with(
+        "links+nodes",
+        include_bytes!("fixtures/subscriptions/links.b64.txt"),
+        &config,
     );
 }

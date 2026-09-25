@@ -45,6 +45,9 @@ pub struct SubscriptionMeta {
     pub proxies: usize,
     /// FlClashX `flclashx-newdomain` redirect: (configured URL, URL to use instead).
     pub url_override: Option<(String, String)>,
+    /// When the running supervisor plans the next update (unix time).
+    #[serde(default)]
+    pub next_update_at: Option<u64>,
 }
 
 impl Store {
