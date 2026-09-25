@@ -187,6 +187,21 @@ impl Updater {
     /// Rebuilds the config from the cached body (current settings applied).
     /// `None` when there is no usable cache for the configured URL and client.
     pub fn restore(&self) -> Result<Option<Restored>> {
+        let Some((meta, analysis)) = self.cached()? else {
+            return Ok(None);
+        };
+        // It was accepted when fetched, possibly via accept_stub: don't re-judge it.
+        let Some(content) = analysis.content.as_ref() else {
+            return Ok(None);
+        };
+        self.write_config(content)?;
+        Ok(Some(Restored {
+            next_update: self.next_update(meta.fetched_at, &analysis.info),
+        }))
+    }
+
+    /// The cached subscription for the configured URL and client, re-analysed.
+    fn cached(&self) -> Result<Option<(SubscriptionMeta, Analysis)>> {
         let (Some(meta), Some(body)) = (self.store.load_meta(), self.store.load_body()) else {
             return Ok(None);
         };
@@ -201,14 +216,26 @@ impl Updater {
             body,
         };
         let analysis = subscription::analyze(&response);
-        // It was accepted when fetched, possibly via accept_stub: don't re-judge it.
-        let Some(content) = analysis.content.as_ref() else {
-            return Ok(None);
-        };
-        self.write_config(content)?;
-        Ok(Some(Restored {
-            next_update: self.next_update(meta.fetched_at, &analysis.info),
-        }))
+        Ok(Some((meta, analysis)))
+    }
+
+    /// Builds (without writing) the mihomo config from the cached subscription.
+    pub fn render(&self) -> Result<crate::profile::Built> {
+        let (_, analysis) = self
+            .cached()?
+            .context("no cached subscription yet: run `mihomyak update` first")?;
+        let content = analysis
+            .content
+            .context("the cached subscription is unusable")?;
+        self.build(&content)
+    }
+
+    fn build(&self, content: &subscription::Content) -> Result<crate::profile::Built> {
+        let mode = self
+            .store
+            .mode()
+            .unwrap_or_else(|| self.config.core.mode.clone());
+        crate::profile::build(content, &self.config, &self.secret, &mode)
     }
 
     /// Records when the supervisor will update next (shown by `mihomyak status`).
@@ -222,11 +249,7 @@ impl Updater {
     }
 
     fn write_config(&self, content: &subscription::Content) -> Result<()> {
-        let mode = self
-            .store
-            .mode()
-            .unwrap_or_else(|| self.config.core.mode.clone());
-        let built = crate::profile::build(content, &self.config, &self.secret, &mode)?;
+        let built = self.build(content)?;
         for warning in &built.warnings {
             crate::warn!("{warning}");
         }

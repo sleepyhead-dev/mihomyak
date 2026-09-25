@@ -55,6 +55,11 @@ impl Store {
         fs::create_dir_all(root.join("subscription"))
             .and_then(|()| fs::create_dir_all(root.join("mihomo")))
             .with_context(|| format!("create data directory {}", root.display()))?;
+        // Holds the subscription (credentials), API secret and HWID seed.
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = fs::set_permissions(root, fs::Permissions::from_mode(0o700)) {
+            crate::debug!("cannot restrict {}: {e}", root.display());
+        }
         Ok(Self {
             root: root.to_path_buf(),
         })

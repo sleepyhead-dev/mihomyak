@@ -73,6 +73,10 @@ pub enum Command {
     /// Interactive terminal UI.
     #[cfg(feature = "tui")]
     Tui,
+    /// Print the mihomo config that would be generated from the cached subscription.
+    Render,
+    /// Validate the settings and the generated config (runs `mihomo -t`).
+    Check,
     /// Exit 0 if the core API answers (for container health checks).
     Health,
     /// Manage the mihomo binary.
@@ -93,6 +97,9 @@ pub enum CoreCommand {
         /// Base URL replacing https://github.com (mirrors for restricted networks).
         #[arg(long, env = "MIHOMYAK_GITHUB_MIRROR")]
         mirror: Option<String>,
+        /// Expected SHA-256 of the downloaded .gz (strongly advised with --mirror).
+        #[arg(long, value_name = "HEX")]
+        sha256: Option<String>,
     },
     /// Print the version of the configured mihomo binary.
     Version,

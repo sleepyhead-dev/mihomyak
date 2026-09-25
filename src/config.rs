@@ -181,6 +181,26 @@ pub struct Rules {
     /// mihomo rules placed before the subscription's own, e.g.
     /// `"DOMAIN-SUFFIX,lan,DIRECT"` or `"DOMAIN-SUFFIX,example.com,Auto"`.
     pub prepend: Vec<String>,
+    /// Built-in rule sets inserted after `prepend`: `ru-direct`.
+    pub presets: Vec<Preset>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Preset {
+    /// Russian sites and IPs bypass the proxy.
+    RuDirect,
+}
+
+impl std::str::FromStr for Preset {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.trim() {
+            "ru-direct" => Ok(Self::RuDirect),
+            other => bail!("unknown rules preset {other:?} (known: ru-direct)"),
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for Interval {
@@ -256,8 +276,16 @@ pub struct Core {
     pub controller: String,
     /// API secret. Default: generated once and stored in the data directory.
     pub secret: Option<String>,
+    /// HTTP+SOCKS5 proxy port (0 disables it, e.g. for TUN-only gateways).
     pub mixed_port: u16,
+    /// Accept proxy connections from other hosts/containers. Off by default:
+    /// the port then only listens on loopback.
     pub allow_lan: bool,
+    /// With `allow_lan`, only these source networks may connect. Defaults to
+    /// private ranges so a VPS with a public IP never becomes an open proxy.
+    pub lan_allowed_ips: Vec<String>,
+    /// Proxy credentials `user:password`; loopback clients are exempt.
+    pub auth: Vec<String>,
     pub bind_address: String,
     pub log_level: String,
     /// Default routing mode (`rule`, `global`, `direct`); `mihomyak mode` persists changes.
@@ -276,7 +304,20 @@ impl Default for Core {
             controller: "127.0.0.1:9090".into(),
             secret: None,
             mixed_port: 7890,
-            allow_lan: true,
+            allow_lan: false,
+            lan_allowed_ips: [
+                "10.0.0.0/8",
+                "172.16.0.0/12",
+                "192.168.0.0/16",
+                "100.64.0.0/10",
+                "127.0.0.0/8",
+                "fc00::/7",
+                "fe80::/10",
+                "::1/128",
+            ]
+            .map(String::from)
+            .to_vec(),
+            auth: Vec::new(),
             bind_address: "*".into(),
             log_level: "warning".into(),
             mode: "rule".into(),
@@ -296,7 +337,8 @@ pub struct Gateway {
     pub stack: String,
     /// nftables-based redirect for TCP (faster, needs nf_tables in the kernel).
     pub auto_redirect: bool,
-    /// Where mihomo's DNS server listens.
+    /// Where mihomo's DNS server listens. TUN hijacks port 53 regardless; expose
+    /// it (e.g. `0.0.0.0:1053`) only if LAN clients should query it directly.
     pub dns_listen: String,
 }
 
@@ -306,7 +348,7 @@ impl Default for Gateway {
             enable: false,
             stack: "system".into(),
             auto_redirect: false,
-            dns_listen: "0.0.0.0:1053".into(),
+            dns_listen: "127.0.0.1:1053".into(),
         }
     }
 }
@@ -338,6 +380,7 @@ impl Config {
     fn from_file(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("read config {}", path.display()))?;
+        warn_if_exposed(path);
         let mut config: Self =
             toml::from_str(&text).with_context(|| format!("parse config {}", path.display()))?;
         config.source = Some(path.to_path_buf());
@@ -385,6 +428,12 @@ impl Config {
         if let Some(v) = flag("MIHOMYAK_UPDATE_ON_START")? {
             update.on_start = v;
         }
+        if let Some(v) = env("MIHOMYAK_RULES_PRESETS") {
+            self.rules.presets = split_list(&v)
+                .iter()
+                .map(|p| p.parse())
+                .collect::<Result<_>>()?;
+        }
         if let Some(v) = env("MIHOMYAK_INCLUDE") {
             self.filter.include = split_list(&v);
         }
@@ -416,6 +465,12 @@ impl Config {
         }
         if let Some(v) = env("MIHOMYAK_SECRET") {
             core.secret = Some(v);
+        }
+        if let Some(v) = flag("MIHOMYAK_ALLOW_LAN")? {
+            core.allow_lan = v;
+        }
+        if let Some(v) = env("MIHOMYAK_PROXY_AUTH") {
+            core.auth = split_list(&v);
         }
         if let Some(v) = env("MIHOMYAK_MIXED_PORT") {
             core.mixed_port = v.parse().context("MIHOMYAK_MIXED_PORT")?;
@@ -468,6 +523,30 @@ impl Config {
                 bail!("[[groups]] name {:?} is reserved", group.name);
             }
         }
+        for cred in &self.core.auth {
+            match cred.split_once(':') {
+                Some((user, pass)) if !user.is_empty() && !pass.is_empty() => {}
+                _ => bail!("core.auth entries must look like \"user:password\""),
+            }
+        }
+        if let Some(host) = self.core.controller.rsplit_once(':').map(|(h, _)| h) {
+            let loopback = matches!(
+                host.trim_matches(['[', ']']),
+                "127.0.0.1" | "localhost" | "::1"
+            ) || host.starts_with("127.");
+            if !self.core.controller.starts_with("unix:") && !loopback {
+                if self.core.secret.as_deref() == Some("") {
+                    bail!(
+                        "core.controller {} is reachable from the network: an empty secret is not allowed",
+                        self.core.controller
+                    );
+                }
+                crate::warn!(
+                    "mihomo API on {} is reachable from the network; keep the secret private",
+                    self.core.controller
+                );
+            }
+        }
         if !is_mode(&self.core.mode) {
             bail!("core.mode must be rule, global or direct");
         }
@@ -481,6 +560,19 @@ impl Config {
         self.subscription.url.as_deref().filter(|u| !u.is_empty()).context(
             "no subscription URL: set MIHOMYAK_SUB_URL or [subscription] url in the config file",
         )
+    }
+}
+
+/// The config holds the subscription URL (a credential) and maybe proxy passwords.
+fn warn_if_exposed(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        if meta.permissions().mode() & 0o077 != 0 {
+            crate::warn!(
+                "{} is readable by other users; it contains your subscription URL (chmod 600)",
+                path.display()
+            );
+        }
     }
 }
 

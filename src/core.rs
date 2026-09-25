@@ -138,7 +138,12 @@ fn release_arch() -> Result<&'static str> {
 }
 
 /// Downloads a mihomo release (`version` or latest) to `dest`.
-pub fn install(version: Option<&str>, dest: &Path, mirror: Option<&str>) -> Result<String> {
+pub fn install(
+    version: Option<&str>,
+    dest: &Path,
+    mirror: Option<&str>,
+    sha256: Option<&str>,
+) -> Result<String> {
     let base = mirror.unwrap_or("https://github.com").trim_end_matches('/');
     let client = Client {
         max_body: 256 * 1024 * 1024,
@@ -161,6 +166,19 @@ pub fn install(version: Option<&str>, dest: &Path, mirror: Option<&str>) -> Resu
             response.status,
             response.reason
         );
+    }
+    match sha256 {
+        Some(expected) => {
+            let actual = crate::util::sha256_hex(&response.body);
+            if !actual.eq_ignore_ascii_case(expected.trim()) {
+                bail!("checksum mismatch: expected {expected}, got {actual}");
+            }
+            crate::info!("sha256 verified");
+        }
+        None if mirror.is_some() => {
+            crate::warn!("downloaded from a mirror without --sha256: the binary is not verified");
+        }
+        None => {}
     }
     let mut binary = Vec::new();
     flate2::read::GzDecoder::new(&response.body[..])

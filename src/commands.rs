@@ -47,6 +47,15 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
         Command::Mode { mode } => mode_cmd(&config, mode.as_deref()),
         #[cfg(feature = "tui")]
         Command::Tui => crate::tui::run(&config).map(|()| ExitCode::SUCCESS),
+        Command::Render => {
+            let built = Updater::new(config)?.render()?;
+            print!("{}", built.config_yaml);
+            for warning in &built.warnings {
+                eprintln!("warning: {warning}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Check => check(config),
         Command::Health => Ok(match api(&config).and_then(|a| a.version()) {
             Ok(_) => ExitCode::SUCCESS,
             Err(e) => {
@@ -185,6 +194,96 @@ fn fetch(config: Config, show_body: bool) -> Result<ExitCode> {
     } else {
         ExitCode::FAILURE
     })
+}
+
+fn check(config: Config) -> Result<ExitCode> {
+    println!(
+        "config:       {}",
+        config
+            .source
+            .as_ref()
+            .map_or("(env/defaults only)".into(), |p| p.display().to_string())
+    );
+    let updater = Updater::new(config)?;
+    let cfg = &updater.config;
+    println!(
+        "client:       {} ({})",
+        updater.emulation.kind,
+        updater.emulation.user_agent()
+    );
+    println!("subscription: {}", subscription::redact(&updater.url()?));
+    println!(
+        "update:       interval {:?}, cron {:?}, on start: {}",
+        cfg.update.interval, cfg.update.cron, cfg.update.on_start
+    );
+    println!(
+        "filter:       include {:?}, exclude {:?}",
+        cfg.filter.include, cfg.filter.exclude
+    );
+    for g in &cfg.groups {
+        println!(
+            "group:        {} ({}) nodes {:?}{}",
+            g.name,
+            g.kind.as_mihomo(),
+            g.nodes,
+            if g.default { ", default" } else { "" }
+        );
+    }
+    println!(
+        "proxy:        port {}, lan {}, auth {}",
+        cfg.core.mixed_port,
+        if cfg.core.allow_lan {
+            "allowed (private ranges)"
+        } else {
+            "off"
+        },
+        if cfg.core.auth.is_empty() {
+            "off"
+        } else {
+            "on"
+        }
+    );
+    let built = match updater.render() {
+        Ok(built) => built,
+        Err(e) => {
+            println!("render:       skipped ({e:#})");
+            return Ok(ExitCode::SUCCESS);
+        }
+    };
+    for warning in &built.warnings {
+        println!("warning:      {warning}");
+    }
+    let bin = crate::core::resolve_bin(cfg, &updater.store);
+    let home = updater.store.mihomo_home();
+    let candidate = updater.store.root().join("check.yaml");
+    crate::util::write_atomic(&candidate, built.config_yaml.as_bytes())?;
+    let output = std::process::Command::new(&bin)
+        .arg("-t")
+        .arg("-d")
+        .arg(&home)
+        .arg("-f")
+        .arg(&candidate)
+        .output();
+    let _ = std::fs::remove_file(&candidate);
+    match output {
+        Ok(out) if out.status.success() => {
+            println!("mihomo -t:    ok");
+            Ok(ExitCode::SUCCESS)
+        }
+        Ok(out) => {
+            println!("mihomo -t:    FAILED");
+            print!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            Ok(ExitCode::FAILURE)
+        }
+        Err(e) => {
+            println!("mihomo -t:    skipped ({}: {e})", bin.display());
+            Ok(ExitCode::SUCCESS)
+        }
+    }
 }
 
 fn print_provider(info: &ProviderInfo) {
@@ -484,9 +583,15 @@ fn core_cmd(config: &Config, cmd: CoreCommand) -> Result<ExitCode> {
             version,
             dest,
             mirror,
+            sha256,
         } => {
             let dest = dest.unwrap_or_else(|| store.root().join("bin/mihomo"));
-            let tag = crate::core::install(version.as_deref(), &dest, mirror.as_deref())?;
+            let tag = crate::core::install(
+                version.as_deref(),
+                &dest,
+                mirror.as_deref(),
+                sha256.as_deref(),
+            )?;
             println!("installed mihomo {tag} to {}", dest.display());
         }
         CoreCommand::Version => {

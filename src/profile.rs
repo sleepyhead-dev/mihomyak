@@ -11,7 +11,7 @@
 use anyhow::{Context, Result};
 use serde_norway::{Mapping, Value};
 
-use crate::config::{Config, GroupType};
+use crate::config::{Config, GroupType, Preset};
 use crate::emulation::ClientKind;
 use crate::pattern::{PatternSet, keep};
 use crate::subscription::{Content, Format};
@@ -161,7 +161,11 @@ pub fn build(content: &Content, config: &Config, secret: &str, mode: &str) -> Re
     apply_filter(map, config, &mut warnings);
     ensure_groups(map);
     apply_custom_groups(map, config, &mut warnings);
-    prepend_rules(map, &config.rules.prepend);
+    let mut extra_rules = config.rules.prepend.clone();
+    for preset in &config.rules.presets {
+        extra_rules.extend(preset_rules(*preset).iter().map(|r| r.to_string()));
+    }
+    prepend_rules(map, &extra_rules);
     apply_managed(map, config);
     // Like FlClashX, the client owns the routing mode: Remnawave's default
     // template ships `mode: global`, which would route through GLOBAL → DIRECT.
@@ -354,6 +358,20 @@ fn apply_custom_groups(map: &mut Mapping, config: &Config, warnings: &mut Vec<St
     groups.splice(0..0, built);
 }
 
+/// Built-in rule sets. GEOIP uses `no-resolve`: resolving every domain just to
+/// test its country would leak all DNS queries to the local resolver.
+fn preset_rules(preset: Preset) -> &'static [&'static str] {
+    match preset {
+        Preset::RuDirect => &[
+            "DOMAIN-SUFFIX,ru,DIRECT",
+            "DOMAIN-SUFFIX,su,DIRECT",
+            "DOMAIN-SUFFIX,xn--p1ai,DIRECT",
+            "GEOSITE,category-ru,DIRECT",
+            "GEOIP,ru,DIRECT,no-resolve",
+        ],
+    }
+}
+
 fn prepend_rules(map: &mut Mapping, extra: &[String]) {
     if extra.is_empty() {
         return;
@@ -371,6 +389,20 @@ fn apply_managed(map: &mut Mapping, config: &Config) {
     set(map, "mixed-port", core.mixed_port);
     set(map, "allow-lan", core.allow_lan);
     set(map, "bind-address", core.bind_address.as_str());
+    let seq =
+        |items: &[String]| Value::Sequence(items.iter().map(|s| Value::from(s.as_str())).collect());
+    if core.allow_lan {
+        set(map, "lan-allowed-ips", seq(&core.lan_allowed_ips));
+    }
+    if !core.auth.is_empty() {
+        set(map, "authentication", seq(&core.auth));
+        // Local processes and the TUN gateway path never need credentials.
+        set(
+            map,
+            "skip-auth-prefixes",
+            Value::Sequence(vec!["127.0.0.1/8".into(), "::1/128".into()]),
+        );
+    }
     set(map, "log-level", core.log_level.as_str());
     // Process lookup costs CPU on every connection and is useless on a gateway.
     set(map, "find-process-mode", "off");
@@ -516,7 +548,8 @@ rules:
         assert!(v.get("socks-port").is_none());
         assert!(v.get("interface-name").is_none());
         assert!(v.get("tun").is_none());
-        assert_eq!(v["allow-lan"].as_bool(), Some(true));
+        assert_eq!(v["allow-lan"].as_bool(), Some(false), "secure default");
+        assert!(v.get("lan-allowed-ips").is_none());
         assert_eq!(v["log-level"].as_str(), Some("warning"));
         assert_eq!(v["external-controller"].as_str(), Some("127.0.0.1:9090"));
         assert_eq!(v["secret"].as_str(), Some("s3cret"));
@@ -535,7 +568,7 @@ rules:
         assert_eq!(v["tun"]["enable"].as_bool(), Some(true));
         assert_eq!(v["tun"]["stack"].as_str(), Some("system"));
         assert_eq!(v["tun"]["auto-route"].as_bool(), Some(true));
-        assert_eq!(v["dns"]["listen"].as_str(), Some("0.0.0.0:1053"));
+        assert_eq!(v["dns"]["listen"].as_str(), Some("127.0.0.1:1053"));
         assert_eq!(
             v["dns"]["nameserver"][0].as_str(),
             Some("1.1.1.1"),
@@ -742,6 +775,23 @@ rules: ["MATCH,Main"]
         assert_eq!(fast["filter"].as_str(), Some("(?i)^(?:.*NL.*)$"));
         assert_eq!(fast["tolerance"].as_u64(), Some(50));
         assert_eq!(v["proxy-groups"][1]["proxies"][0].as_str(), Some("Fast"));
+    }
+
+    #[test]
+    fn lan_exposure_and_auth() {
+        let config: Config = toml::from_str(
+            "[core]\nallow_lan = true\nauth = [\"me:s3cret\"]\n[rules]\npresets = [\"ru-direct\"]\nprepend = [\"DOMAIN,a.example,DIRECT\"]",
+        )
+        .unwrap();
+        let v = built(&parsed(REMNAWAVE), &config);
+        assert_eq!(v["allow-lan"].as_bool(), Some(true));
+        assert_eq!(v["lan-allowed-ips"][0].as_str(), Some("10.0.0.0/8"));
+        assert_eq!(v["authentication"][0].as_str(), Some("me:s3cret"));
+        assert_eq!(v["skip-auth-prefixes"][0].as_str(), Some("127.0.0.1/8"));
+        assert_eq!(v["rules"][0].as_str(), Some("DOMAIN,a.example,DIRECT"));
+        assert_eq!(v["rules"][1].as_str(), Some("DOMAIN-SUFFIX,ru,DIRECT"));
+        assert_eq!(v["rules"][5].as_str(), Some("GEOIP,ru,DIRECT,no-resolve"));
+        assert_eq!(v["rules"][6].as_str(), Some("MATCH,→ Remnawave"));
     }
 
     #[test]
