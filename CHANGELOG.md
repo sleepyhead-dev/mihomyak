@@ -4,6 +4,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-26
+
 First version of mihomyak (a rewrite of the mihoro fork).
 
 ### Added
