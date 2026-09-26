@@ -33,14 +33,19 @@ cargo clippy --all-targets -- -D warnings
 cargo clippy --all-targets --no-default-features -- -D warnings   # without TUI
 cargo test                                   # unit + golden requests
 MIHOMYAK_TEST_MIHOMO=/path/to/mihomo cargo test   # + real `mihomo -t` validation
+cargo +1.88 test                             # MSRV
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 cargo deny check                             # supply chain (cargo install cargo-deny)
 ./scripts/build-static.sh aarch64-unknown-linux-musl   # static ARM build (clang + rust-lld)
 docker buildx build --platform linux/arm64 -t mihomyak .
 python3 dev/mock_panel.py --port 8080 --device-limit 1   # fake Remnawave for e2e
 ```
 
-CI (`.github/workflows/ci.yml`) runs all of the above; `release.yml` publishes static
-tarballs and a multi-arch GHCR image on `v*` tags.
+CI (`.github/workflows/ci.yml`) runs all of the above except the mock-panel e2e;
+`release.yml` reuses it, checks that the tag matches `Cargo.toml`, then publishes
+static tarballs and a multi-arch GHCR image on `v*` tags. No run of the GitHub
+workflows has been observed yet (GitHub was not reachable from the dev sandbox),
+so expect to fix small issues on the first run.
 
 ## Layout
 
@@ -60,7 +65,14 @@ See `docs/ARCHITECTURE.md` for the module map and design decisions. Quick pointe
   binary is ~3 MB static; the supervisor idles at ~2–4 MB RSS.
 - Every emulation constant must be backed by source code or a captured request, and
   documented in `docs/SUBSCRIPTIONS.md`. Unverified behaviour is marked as such.
-- Secrets never go to logs: use `subscription::redact` for URLs.
+- Secrets never go to logs: use `subscription::redact` for URLs; `http::Url`
+  errors never contain the input.
+- Everything from the panel is untrusted: new subscription keys go through the
+  allowlist in `profile.rs` (`PROVIDER_KEYS`, `PROVIDER_DNS_KEYS`, `PROXY_TYPES`),
+  provider text goes through `util::sanitize` before it is printed or logged, and
+  the HTTP client bounds every read. Keep it that way.
+- A config reaches mihomo only via `Updater` (build → `mihomo -t` → backup →
+  write); never write `config.yaml` elsewhere.
 - Tests live next to the code; cross-module behaviour goes to `tests/`.
 - Conventional commit messages (`feat:`, `fix:`, `docs:`, `build:`…).
 
@@ -81,8 +93,19 @@ When FlClashX/Koala/Happ release a new version:
 
 - GitHub web/API and `dl-cdn.alpinelinux.org` were blocked; release downloads, raw
   GitHub and git clones worked. Docker builds of the Alpine build stage could not run
-  there, so the runtime image was verified with a host-built static binary instead.
-- Pushing to the repo failed with 403 (GitHub App access). Commits were made locally.
+  there, so the runtime image was verified with a host-built static binary instead
+  (`FROM metacubex/mihomo` + `COPY mihomyak`).
+- Pushing works; early in the project it failed with 403 until GitHub access was
+  fixed.
+
+## Review history
+
+Before the first release the whole project was reviewed by four independent
+agents (code correctness, security, runtime/e2e, structure/docs) and every
+finding was fixed or documented. The main results are listed under "Security" in
+`CHANGELOG.md`. Deliberately left as documented limitations: gateway fail-open
+while mihomo is down, TLS fingerprint differences, no `happ://crypt` or IDN
+support.
 
 ## Status and ideas
 
@@ -98,3 +121,6 @@ Possible next steps (discuss with the owner first):
   a panel sits behind fingerprinting anti-bot protection.
 - LAN gateway scenario (`network_mode: host` + ip_forward) is documented but was not
   tested end to end.
+- Gateway fail-closed mode (block container traffic while mihomo is down), e.g. an
+  nftables rule installed by the supervisor. Needs a decision from the owner: it
+  adds privileges and complexity.

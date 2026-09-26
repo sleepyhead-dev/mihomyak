@@ -25,5 +25,34 @@ First version of mihomyak (a rewrite of the mihoro fork).
   core install; ratatui TUI.
 - Secure defaults: loopback-only proxy, private-range LAN allowlist, optional proxy
   auth, API secret, umask 077 / 0700 data directory.
-- CI (lint, tests incl. real mihomo validation, cross builds, cargo-deny, docker) and
-  release workflows (static binaries + multi-arch image).
+- CI (lint, tests incl. real mihomo validation, MSRV, rustdoc, cross builds,
+  cargo-deny, docker) and release workflows (static binaries + multi-arch image,
+  published only after CI and a tag/version check).
+- CLI: `run`, `update`, `status`, `proxies`, `select`, `test`, `mode`, `tui`, `fetch`,
+  `identity`, `render`, `check`, `health`, `core install`, `core version`.
+
+### Security (full project review before the first release)
+- Subscriptions are untrusted input: only an allowlist of top-level keys is used
+  (no listeners, tunnels, ports, controller, TUN, geodata URLs, DNS listen),
+  overlay-network proxy types are dropped, provider download paths are fixed and
+  local file providers removed.
+- Hardened HTTP client: bounded lines/headers/chunks/trailers/decompression,
+  wall-clock deadline, 1xx handling, RFC 3986 redirects, no https→http downgrade,
+  URL errors never echo the token, CR/LF can never reach request headers.
+- Configs are validated with `mihomo -t` before use and rolled back from `*.prev`
+  when the running core rejects a reload.
+- mihomo runs with a scrubbed environment and exits with the supervisor
+  (`PR_SET_PDEATHSIG`); supervisor lock via `flock`; `core install` from a mirror
+  requires `--sha256`.
+- Provider-controlled text is stripped of control characters before logging or
+  printing.
+
+### Changed
+- FlClashX header order is computed with a model of Dart's `HashMap` for any
+  header set; os-release is parsed the device_info_plus way (with lsb-release
+  fallback). Happ `Accept-Language` follows Qt's rules.
+- Gateway mode keeps the subscription panel off the tunnel (fake-ip filter, route
+  exclusions), so updates work even when every node is down.
+- Cron: Vixie day semantics for `*/n`, case-insensitive aliases, impossible dates
+  rejected, UTC offset logged at start. Minimum update interval is 5 minutes
+  everywhere.

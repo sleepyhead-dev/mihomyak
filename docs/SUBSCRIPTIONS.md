@@ -242,7 +242,7 @@ HWID (`app/operation/subscription.py`, `validate_and_register_hwid`):
 Исходники: `github.com/pluralplay/FlClashX`.
 
 **[cap]** (dart:io пишет имена заголовков в нижнем регистре; порядок — итерация
-внутреннего HashMap Dart, стабилен):
+внутреннего `HashMap` Dart, см. ниже):
 
 ```http
 GET /sub/abc HTTP/1.1
@@ -263,8 +263,27 @@ x-hwid: A3B522EAA6F7DD89
 | UA | `"FlClash X/v$appVersion"` + ` core/$coreVersion` + ` Platform/${Platform.operatingSystem}` | `lib/common/package.dart`, `lib/state.dart` |
 | `x-hwid` | `sha256(machineId).hex[0..16].toUpperCase()`; `machineId` = `/etc/machine-id` (device_info_plus) | `lib/utils/device_info_service.dart` |
 | `x-device-os` | `Linux` | там же |
-| `x-ver-os` | `VERSION_ID` из `/etc/os-release` (заголовок не шлётся, если его нет, например в Arch) | там же |
-| `x-device-model` | `NAME` из `/etc/os-release` (по умолчанию `Linux`) | там же |
+| `x-ver-os` | device_info_plus `versionId` = `VERSION_ID` из os-release, иначе `DISTRIB_RELEASE` из `/etc/lsb-release`; пустое значение всё равно шлётся, заголовка нет, только если нет обоих (например, Arch) | там же |
+| `x-device-model` | device_info_plus `name` = `NAME` из os-release, иначе `Linux` | там же |
+
+os-release device_info_plus читает по-своему: `/etc/os-release`, иначе
+`/usr/lib/os-release`; строка делится по `=` и принимается, только если частей ровно
+две; снимаются только двойные кавычки (отдельно в начале и в конце), пробелы не
+обрезаются, при повторе ключа побеждает последняя строка. mihomyak повторяет эти
+правила (`OsRelease::dip_get`).
+
+**Порядок заголовков.** dart:io хранит заголовки в `HashMap<String, List<String>>`
+(VM-реализация `_HashMap`, `sdk/lib/_internal/vm/lib/collection_patch.dart`) и пишет
+их в порядке итерации. Модель: 8 корзин, новый элемент добавляется в начало цепочки,
+при `4·n > 3·ёмкость` таблица удваивается (цепочки перекладываются по порядку
+корзин), итерация идёт по корзинам от 0; хеш строки — Jenkins one-at-a-time по
+UTF-16, обрезанный до 30 бит (0 → 1). Порядок вставки: `host`, `accept-encoding`
+(HttpClient), затем `user-agent`, `x-hwid`, `x-device-os`, `x-device-model`,
+`x-ver-os` (FlClashX), затем пользовательские заголовки. Модель воспроизводит
+перехваченный порядок для 7 ключей; без `x-ver-os` (6 ключей, таблица не растёт)
+порядок другой: `user-agent, x-device-model, accept-encoding, x-hwid, x-device-os,
+host`. mihomyak вычисляет порядок моделью для любого набора ключей
+(`emulation::dart_hashmap_order`).
 
 Проверка: `sha256("0d0af05ee8fd4dc29275718f2ce4dff1")[:16].upper() = A3B522EAA6F7DD89` ✔.
 
@@ -315,7 +334,9 @@ Connection: keep-alive
 - deep link `clash://install-config?url=…` сначала шлёт `HEAD` со стандартным
   `User-Agent: axios/1.15.1` **без** HWID-заголовков (чтобы прочитать `profile-title`);
 - при `x-hwid-limit: true` или `x-hwid-max-devices-reached: true` бросает `HWID_LIMIT`;
-- при `content-type: text/html|text/xml` — ошибка формата;
+- при `content-type: text/html|text/xml` — ошибка формата (так поступает только
+  Koala: FlClashX и Happ смотрят на тело, поэтому mihomyak проверяет Content-Type
+  только в профиле `koala`);
 - дополнительно понимает `profile-web-page-name`, `profile-logo`, `expand-proxy-groups`,
   `profile-update-interval` (часы; блокирует ручное изменение интервала).
 
@@ -353,7 +374,12 @@ Accept-Language: en,*
   (UTC+3). Похоже на примитивную защиту от подделки UA;
 - `X-Hwid` = сырой `/etc/machine-id` (32 hex);
 - `X-Device-Model` = `<hostname>_<cpu arch>` (`QSysInfo`), `X-Ver-Os` = `<productType>_<productVersion>`;
-- `X-Device-Locale` = язык системы в верхнем регистре; `Accept-Language` — по локали Qt;
+- `X-Device-Locale` = язык системы в верхнем регистре; `Accept-Language` строит Qt:
+  `QLocale::system().name()` через `-`, затем `,*` для английского и `,en,*` для
+  остальных; локаль `C` считается `en`. Проверено: `C` → `en,*`, `ru_RU` →
+  `ru-RU,en,*`. Для языка без региона (`ru`) Qt подставляет вероятный регион по CLDR
+  (`ru-RU`); mihomyak делает так же для распространённых языков, **не проверено
+  захватом**;
 - в бинарнике есть поддержка `happ://crypt/…crypt5/` (зашифрованные ссылки), заголовков
   провайдера (`providerid`, `routing`, `change-user-agent`, `manual-block-user-agent`, …).
 
@@ -363,7 +389,7 @@ Remnawave XRAY_JSON — это **массив** полных Xray-конфиго
 и outbound'ом `tag: "proxy"` (`xray-json.generator.service.ts`).
 
 Что mihomyak делает так же, как оригинал, но не проверено захватом (помечено в коде):
-`Accept-Language` для локалей, кроме `en` и `ru_RU`; `X-Ver-Os` для дистрибутивов без
+`Accept-Language` для локалей, кроме `C`/`en` и `ru_RU`; `X-Ver-Os` для дистрибутивов без
 `ID`/`VERSION_ID` (Qt вернёт `unknown`).
 
 Android-версия Happ (по сторонним данным, **не проверено**): `User-Agent: Happ/<ver>`,
@@ -394,6 +420,9 @@ Happ — сырой machine-id. Remnawave сравнивает HWID как ст�
   fragment), Xray mux, транспорт kcp, finalmask hysteria. Такие хосты пропускаются или
   конвертируются без опции, с предупреждением в логе.
 - **IDN-домены** (`.рф`) не поддерживаются: нужен punycode.
+- **Управляющие символы** (CR, LF, TAB) в значениях заголовков не отправляются:
+  настоящий клиент на них упал бы, а mihomyak их вырезает (например, os-release с
+  окончаниями строк CRLF).
 
 ## 9. Практические выводы (что реализовано в mihomyak)
 
@@ -410,3 +439,13 @@ Happ — сырой machine-id. Remnawave сравнивает HWID как ст�
    Remnawave игнорируется, иначе трафик ушёл бы через `GLOBAL → DIRECT`.
 8. Xray JSON конвертируется по той же таблице полей, что использует генератор mihomo
    в самом Remnawave (`mihomo.generator.service.ts`), и проверяется `mihomo -t` в тестах.
+   Привязка сертификата (`pinnedPeerCertSha256`) переносится в `fingerprint` mihomo,
+   reality без открытого ключа пропускается.
+9. Подписка — недоверенный вход. Из неё берётся только белый список ключей (прокси,
+   группы, провайдеры, правила, политика DNS), небезопасные типы прокси
+   (tailscale, zerotier, …) выбрасываются, провайдеры не могут выбрать путь файла.
+   Каждый новый конфиг проверяется `mihomo -t` до применения, а если работающий
+   mihomo всё же отверг его при перезагрузке, возвращаются файлы `*.prev`.
+10. Редирект с https на http не выполняется (токен и HWID ушли бы открытым текстом);
+    `flclashx-newdomain` принимается только из ответа по https и только как голое
+    имя хоста.

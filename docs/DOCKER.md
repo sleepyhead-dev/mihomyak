@@ -9,7 +9,7 @@ geo-базы. Бинарник mihomyak кросс-компилируется (`
 | `/data` (volume) | всё состояние: machine-id (HWID!), секрет, кэш подписки, конфиг и кэш mihomo |
 | `/data/config.toml` | необязательный конфиг (`MIHOMYAK_CONFIG`) |
 | `MIHOMYAK_CORE_BIN=/mihomo` | mihomo из базового образа |
-| `MIHOMYAK_GEODATA_DIR=/root/.config/mihomo` | geo-базы копируются в `/data/mihomo` при первом старте |
+| `MIHOMYAK_GEODATA_DIR=/root/.config/mihomo` | недостающие geo-базы копируются в `/data/mihomo` при старте |
 | порт `7890` | HTTP+SOCKS5 (слушает только loopback, пока не задан `MIHOMYAK_ALLOW_LAN=1`) |
 | `HEALTHCHECK` | `mihomyak health` (отвечает ли API mihomo) |
 
@@ -24,7 +24,7 @@ geo-базы. Бинарник mihomyak кросс-компилируется (`
 services:
   mihomyak:
     image: ghcr.io/sleepyhead-dev/mihomyak:latest
-    env_file: .env                 # MIHOMYAK_SUB_URL и прочее
+    env_file: .env                 # deploy/.env: MIHOMYAK_SUB_URL и прочее
     environment: { MIHOMYAK_GATEWAY: "1" }
     devices: [/dev/net/tun:/dev/net/tun]
     cap_drop: [ALL]
@@ -45,12 +45,24 @@ DNS (`dns-hijack any:53`, fake-ip), поэтому любой TCP/UDP и DNS п�
 Проверено в этой сборке: запрос из контейнера-клиента проходит через
 shadowsocks-узел; при остановке узла запрос падает (обхода нет); DNS отдаёт fake-ip.
 
+Сам супервизор тоже живёт в этом пространстве имён, поэтому хосты панели и их
+адреса выводятся из-под туннеля (`fake-ip-filter` и `route-exclude-address`):
+подписка обновляется, даже если все узлы умерли. Трафик приложений к адресу панели
+тоже идёт напрямую.
+
+**Ограничение (fail-open).** Пока mihomo не работает (первый старт до получения
+подписки, перезапуск после падения), TUN нет, и трафик приложений идёт напрямую
+через docker-сеть, а не блокируется. Если утечка недопустима, закройте исходящий
+трафик контейнеров на хосте (nftables, `DOCKER-USER`) или используйте сценарий 2:
+там приложения без прокси в сеть не выходят.
+
 ## Сценарий 2. Явный HTTP/SOCKS-прокси
 
 [`deploy/compose.proxy.yml`](../deploy/compose.proxy.yml): mihomyak и приложения в одной
 docker-сети, у приложений `HTTP_PROXY=http://mihomyak:7890`. Нужен
 `MIHOMYAK_ALLOW_LAN=1`. Подключения принимаются только из частных сетей, куда входят
-docker-сети `172.16.0.0/12`. Можно добавить пароль через `MIHOMYAK_PROXY_AUTH`. TUN и
+docker-сети `172.16.0.0/12`, то есть **любой** контейнер на хосте. Задайте пароль через
+`MIHOMYAK_PROXY_AUTH` или сузьте `core.lan_allowed_ips` до своей сети. TUN и
 `NET_ADMIN` здесь не нужны.
 
 ## Сценарий 3. Шлюз для LAN или хоста (продвинутый)
@@ -69,15 +81,21 @@ docker-сети `172.16.0.0/12`. Можно добавить пароль чер
 - `read_only: true` + `tmpfs: /tmp`: запись возможна только в `/data`;
 - `cap_drop: [ALL]`, и только для шлюза `cap_add: [NET_ADMIN]`;
 - `no-new-privileges`;
+- `mem_limit: 256m`, `pids_limit: 256` (mihomo обычно занимает ~40 МБ);
+- `stop_grace_period: 15s`: супервизор ждёт mihomo до 8 с, чтобы тот убрал маршруты;
 - прокси-порт не опубликован наружу; API mihomo только на `127.0.0.1` внутри
   контейнера, с сгенерированным секретом;
-- umask 077: секреты и подписка в `/data` с правами `0600`, каталог `0700`.
+- umask 077: секреты и подписка в `/data` с правами `0600`;
+- mihomo запускается с очищенным окружением (ссылка на подписку и секреты
+  `MIHOMYAK_*` ему не передаются) и завершается вместе с супервизором;
+- из подписки берётся только белый список ключей: провайдер не может открыть
+  порты, listeners или туннели в контейнере ([CONFIG.md](CONFIG.md#что-mihomyak-делает-с-конфигом-провайдера)).
 
 Проверено: контейнер с `--read-only --cap-drop ALL --cap-add NET_ADMIN
 --security-opt no-new-privileges` запускается, становится healthy и проксирует.
 
-`.env` содержит ссылку на подписку. Держите его с правами `600` и не коммитьте
-(`.env` в `.gitignore`).
+`deploy/.env` содержит ссылку на подписку. Держите его с правами `600` и не
+коммитьте (`.env` в `.gitignore`).
 
 ## Точность имитации в контейнере
 
@@ -117,4 +135,5 @@ docker buildx build --build-arg MIHOMO_VERSION=v1.19.31 --load -t mihomyak .
 ```
 
 Сборочной стадии нужен доступ к `dl-cdn.alpinelinux.org` (пакеты clang/lld),
-crates.io и Docker Hub.
+crates.io и Docker Hub. В compose-файлах рядом с `image:` указан `build: ..`: если
+образ ещё не опубликован, `docker compose up --build` соберёт его из репозитория.
