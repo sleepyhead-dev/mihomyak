@@ -115,6 +115,8 @@ impl Api {
             total_timeout: Duration::from_secs(60),
             proxy: None,
             max_body: 16 * 1024 * 1024,
+            // Loopback or a unix socket: never subject to the kill switch.
+            mark: None,
         };
         Ok(Self {
             endpoint,

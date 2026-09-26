@@ -350,6 +350,8 @@ pub struct Gateway {
     /// Where mihomo's DNS server listens. TUN hijacks port 53 regardless; expose
     /// it (e.g. `0.0.0.0:1053`) only if LAN clients should query it directly.
     pub dns_listen: String,
+    /// Block traffic that would bypass mihomo while it is down (see `killswitch`).
+    pub kill_switch: bool,
 }
 
 impl Default for Gateway {
@@ -359,6 +361,7 @@ impl Default for Gateway {
             stack: "system".into(),
             auto_redirect: false,
             dns_listen: "127.0.0.1:1053".into(),
+            kill_switch: false,
         }
     }
 }
@@ -500,6 +503,9 @@ impl Config {
         if let Some(v) = flag("MIHOMYAK_GATEWAY")? {
             self.gateway.enable = v;
         }
+        if let Some(v) = flag("MIHOMYAK_KILL_SWITCH")? {
+            self.gateway.kill_switch = v;
+        }
         Ok(())
     }
 
@@ -604,6 +610,9 @@ impl Config {
         }
         if !["system", "gvisor", "mixed"].contains(&self.gateway.stack.as_str()) {
             bail!("gateway.stack must be system, gvisor or mixed");
+        }
+        if self.gateway.kill_switch && !self.gateway.enable {
+            bail!("gateway.kill_switch needs gateway.enable (MIHOMYAK_GATEWAY=1)");
         }
         Ok(())
     }
@@ -751,6 +760,8 @@ mod tests {
         assert!(dup.validate().is_err());
         let bad_cron: Config = toml::from_str("[update]\ncron = [\"61 * * * *\"]").unwrap();
         assert!(bad_cron.validate().is_err());
+        let lone_kill_switch: Config = toml::from_str("[gateway]\nkill_switch = true").unwrap();
+        assert!(lone_kill_switch.validate().is_err());
         assert!(toml::from_str::<Config>("[subscription]\nclient = \"hiddify\"").is_err());
     }
 
@@ -761,6 +772,7 @@ mod tests {
             ("MIHOMYAK_SUB_URL", "https://s.example/x"),
             ("MIHOMYAK_CLIENT", "koala"),
             ("MIHOMYAK_GATEWAY", "true"),
+            ("MIHOMYAK_KILL_SWITCH", "1"),
             ("MIHOMYAK_UPDATE_INTERVAL", "auto"),
             ("MIHOMYAK_MIXED_PORT", "1080"),
             ("MIHOMYAK_UPDATE_CRON", "0 5 * * *; 30 17 * * *"),
@@ -775,7 +787,8 @@ mod tests {
             Some("https://s.example/x")
         );
         assert_eq!(config.subscription.client, ClientKind::Koala);
-        assert!(config.gateway.enable);
+        assert!(config.gateway.enable && config.gateway.kill_switch);
+        config.validate().unwrap();
         assert_eq!(config.core.mixed_port, 1080);
         assert_eq!(config.update.cron, ["0 5 * * *", "30 17 * * *"]);
         assert_eq!(config.filter.exclude, ["*test*", "*Россия, Москва*"]);

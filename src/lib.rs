@@ -13,6 +13,7 @@ pub mod core;
 pub mod emulation;
 pub mod http;
 pub mod identity;
+pub mod killswitch;
 pub mod pattern;
 pub mod profile;
 pub mod schedule;

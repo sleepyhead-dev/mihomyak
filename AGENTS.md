@@ -103,9 +103,10 @@ When FlClashX/Koala/Happ release a new version:
 Before the first release the whole project was reviewed by four independent
 agents (code correctness, security, runtime/e2e, structure/docs) and every
 finding was fixed or documented. The main results are listed under "Security" in
-`CHANGELOG.md`. Deliberately left as documented limitations: gateway fail-open
-while mihomo is down, TLS fingerprint differences, no `happ://crypt` or IDN
-support.
+`CHANGELOG.md`. Deliberately left as documented limitations: TLS fingerprint
+differences and no `happ://crypt` support. The gateway fail-open was later
+addressed with the opt-in kill switch (`src/killswitch.rs`), IDN hosts with a
+built-in punycode encoder (`http::to_ascii_domain`).
 
 ## Status and ideas
 
@@ -113,7 +114,6 @@ Done and verified end to end: see `CHANGELOG.md`.
 
 Possible next steps (discuss with the owner first):
 
-- IDN (`.рф`) subscription hosts need punycode in `http::Url`.
 - Several subscriptions merged into one config (was considered, not requested yet).
 - Xray JSON: `sockopt.dialerProxy` chains / fragment, kcp and hysteria `finalmask`
   are not converted (logged). Revisit if providers depend on them.
@@ -121,6 +121,7 @@ Possible next steps (discuss with the owner first):
   a panel sits behind fingerprinting anti-bot protection.
 - LAN gateway scenario (`network_mode: host` + ip_forward) is documented but was not
   tested end to end.
-- Gateway fail-closed mode (block container traffic while mihomo is down), e.g. an
-  nftables rule installed by the supervisor. Needs a decision from the owner: it
-  adds privileges and complexity.
+- Kill switch covers traffic leaving the namespace (`OUTPUT`), not traffic the
+  host forwards for LAN clients (`FORWARD`, scenario 3). Extend only if needed.
+- A TLS ClientHello closer to the real clients is possible (see the discussion in
+  `docs/SUBSCRIPTIONS.md` §8) but costs a C/C++ TLS stack; not planned.

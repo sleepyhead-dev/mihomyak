@@ -85,6 +85,11 @@ impl Updater {
             client: http::Client {
                 proxy,
                 max_body: MAX_SUBSCRIPTION_BYTES,
+                // The panel must stay reachable while the kill switch blocks the rest.
+                mark: config
+                    .gateway
+                    .kill_switch
+                    .then_some(crate::killswitch::MARK),
                 ..http::Client::default()
             },
             crons: config

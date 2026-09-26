@@ -83,6 +83,18 @@ fn remnawave_mihomo_yaml_gateway() {
 }
 
 #[test]
+fn remnawave_mihomo_yaml_gateway_kill_switch() {
+    let mut config = Config::default();
+    config.gateway.enable = true;
+    config.gateway.kill_switch = true;
+    validate_with(
+        "remnawave-mihomo+kill-switch",
+        include_bytes!("fixtures/subscriptions/remnawave-mihomo.yaml"),
+        &config,
+    );
+}
+
+#[test]
 fn xray_json_conversion() {
     validate(
         "remnawave-xray",

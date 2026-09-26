@@ -203,6 +203,12 @@ pub fn build(content: &Content, config: &Config, params: &Params<'_>) -> Result<
         .as_mapping_mut()
         .context("[mihomo] overrides replaced the config root")?;
     apply_controller(map, config, params.secret);
+    if config.gateway.enable && config.gateway.kill_switch {
+        // The kill switch lets out only this TUN device and marked traffic, so
+        // `[mihomo]` must not rename one or unmark the other.
+        set(map, "routing-mark", crate::killswitch::MARK);
+        set(child(map, "tun"), "device", crate::killswitch::TUN_DEVICE);
+    }
     Ok(Built {
         config_yaml: serde_norway::to_string(&root)?,
         provider,
@@ -811,6 +817,7 @@ fn apply_gateway(map: &mut Mapping, config: &Config, params: &Params<'_>) {
     let gw = &config.gateway;
     let tun = child(map, "tun");
     set(tun, "enable", true);
+    set(tun, "device", crate::killswitch::TUN_DEVICE);
     set(tun, "stack", gw.stack.as_str());
     set(tun, "auto-route", true);
     set(tun, "auto-redirect", gw.auto_redirect);
@@ -1061,6 +1068,30 @@ rules:
         );
         assert_eq!(v["dns"]["enhanced-mode"].as_str(), Some("fake-ip"));
         assert_eq!(v["dns"]["enable"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn kill_switch_marks_mihomo_and_pins_the_tun_name() {
+        let mut config: Config =
+            toml::from_str("[mihomo]\nrouting-mark = 1\ntun = { device = \"utun9\" }").unwrap();
+        config.gateway.enable = true;
+        let v = built(&parsed(REMNAWAVE), &config);
+        assert_eq!(
+            v["tun"]["device"].as_str(),
+            Some("utun9"),
+            "user wins without kill switch"
+        );
+        assert_eq!(v["routing-mark"].as_u64(), Some(1));
+        config.gateway.kill_switch = true;
+        let v = built(&parsed(REMNAWAVE), &config);
+        assert_eq!(
+            v["tun"]["device"].as_str(),
+            Some(crate::killswitch::TUN_DEVICE)
+        );
+        assert_eq!(
+            v["routing-mark"].as_u64(),
+            Some(u64::from(crate::killswitch::MARK))
+        );
     }
 
     #[test]

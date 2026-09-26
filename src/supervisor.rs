@@ -43,6 +43,14 @@ enum Event {
 pub fn run(config: Config) -> Result<()> {
     let updater = Updater::new(config)?;
     let _lock = updater.store.lock_supervisor()?;
+    // Before anything else: from here on nothing may bypass mihomo. Dropped (rules
+    // removed) only when `run` returns.
+    let _kill_switch = updater
+        .config
+        .gateway
+        .kill_switch
+        .then(crate::killswitch::enable)
+        .transpose()?;
     Supervisor::new(updater)?.run()
 }
 

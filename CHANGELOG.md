@@ -47,6 +47,12 @@ First version of mihomyak (a rewrite of the mihoro fork).
 - Provider-controlled text is stripped of control characters before logging or
   printing.
 
+### Added (after the review)
+- Opt-in gateway kill switch (`gateway.kill_switch`, `MIHOMYAK_KILL_SWITCH`):
+  while mihomo is down only DNS, private networks, replies and the marked traffic
+  of mihomo/mihomyak may leave; installed atomically with iptables-restore.
+- Internationalised subscription hosts (`.рф`) are converted to punycode.
+
 ### Changed
 - FlClashX header order is computed with a model of Dart's `HashMap` for any
   header set; os-release is parsed the device_info_plus way (with lsb-release

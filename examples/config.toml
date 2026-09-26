@@ -94,6 +94,9 @@ enable = false
 stack = "system"                 # system (lightest) | gvisor | mixed
 auto_redirect = false            # nftables TCP redirect (faster, needs nf_tables)
 dns_listen = "127.0.0.1:1053"
+# Block traffic that would bypass mihomo while it is down (needs iptables and
+# CAP_NET_ADMIN). DNS, private networks and mihomo/mihomyak themselves stay allowed.
+kill_switch = false
 
 # Raw mihomo keys, deep-merged last (anything mihomo supports; unlike the
 # subscription, this file is trusted).

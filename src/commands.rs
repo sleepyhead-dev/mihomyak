@@ -253,6 +253,14 @@ fn check(config: Config) -> Result<ExitCode> {
             "on"
         }
     );
+    println!(
+        "gateway:      {}",
+        match (cfg.gateway.enable, cfg.gateway.kill_switch) {
+            (false, _) => "off",
+            (true, false) => "on (TUN)",
+            (true, true) => "on (TUN, kill switch)",
+        }
+    );
     let built = match updater.render() {
         Ok(built) => built,
         Err(e) => {

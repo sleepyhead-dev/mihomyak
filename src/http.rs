@@ -15,7 +15,7 @@
 //! server trickling one byte per `io_timeout` cannot hold the supervisor forever.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{IpAddr, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -83,7 +83,7 @@ impl Url {
             bail!("credentials inside the URL are not supported");
         }
         let (host, port) = split_host_port(authority)?;
-        validate_host(host)?;
+        let host = normalize_host(host)?;
         let target = if target.starts_with('?') {
             format!("/{target}")
         } else {
@@ -91,7 +91,7 @@ impl Url {
         };
         Ok(Self {
             scheme,
-            host: host.to_ascii_lowercase(),
+            host,
             port: port.unwrap_or(scheme.default_port()),
             target: encode_target(&target),
         })
@@ -157,9 +157,8 @@ impl Url {
             bail!("new domain must be a bare host[:port]");
         }
         let (host, port) = split_host_port(host)?;
-        validate_host(host)?;
         Ok(Self {
-            host: host.to_ascii_lowercase(),
+            host: normalize_host(host)?,
             port: port.unwrap_or(self.port),
             ..self.clone()
         })
@@ -241,22 +240,116 @@ fn split_host_port(authority: &str) -> Result<(&str, Option<u16>)> {
     Ok((host, port))
 }
 
-/// Hosts go verbatim into the `Host` header and the TLS SNI, so only DNS names and
-/// IP literals are accepted (this also rules out header injection).
-fn validate_host(host: &str) -> Result<()> {
+/// Lower-cases the host and converts internationalised names (`пример.рф`) to
+/// their ASCII form (`xn--e1afmkfd.xn--p1ai`), as browsers, Node (Koala) and Qt
+/// (Happ) do before DNS, SNI and the `Host` header. Hosts go verbatim into the
+/// request, so only DNS names and IP literals are accepted afterwards (this also
+/// rules out header injection).
+fn normalize_host(host: &str) -> Result<String> {
     if host.is_empty() {
         bail!("URL has no host");
     }
-    if !host.is_ascii() {
-        bail!("internationalised domain names are not supported, use the punycode form");
-    }
+    let host = if host.is_ascii() {
+        host.to_ascii_lowercase()
+    } else {
+        to_ascii_domain(host).ok_or_else(|| anyhow!("URL host is not a valid domain name"))?
+    };
     if !host
         .bytes()
         .all(|b| b.is_ascii_alphanumeric() || b"-._:".contains(&b))
     {
         bail!("URL host contains invalid characters");
     }
-    Ok(())
+    Ok(host)
+}
+
+/// IDNA ToASCII for the common case: lower-case, split on (ideographic) dots,
+/// Punycode every non-ASCII label. The full UTS #46 mapping table (compatibility
+/// characters, `ß`, NFC) is deliberately not bundled; Cyrillic, Latin with
+/// diacritics and similar names come out exactly as in browsers.
+fn to_ascii_domain(host: &str) -> Option<String> {
+    let host = host.to_lowercase();
+    let labels: Vec<String> = host
+        .split(['.', '\u{3002}', '\u{ff0e}', '\u{ff61}'])
+        .map(|label| {
+            if label.is_ascii() {
+                Some(label.to_owned())
+            } else {
+                Some(format!("xn--{}", punycode(label)?))
+            }
+        })
+        .collect::<Option<_>>()?;
+    labels
+        .iter()
+        .all(|l| !l.is_empty() && l.len() <= 63)
+        .then(|| labels.join("."))
+}
+
+/// Punycode encoder (RFC 3492 §6.3).
+fn punycode(input: &str) -> Option<String> {
+    const BASE: u32 = 36;
+    const T_MIN: u32 = 1;
+    const T_MAX: u32 = 26;
+    fn digit(d: u32) -> char {
+        char::from(if d < 26 {
+            b'a' + d as u8
+        } else {
+            b'0' + (d - 26) as u8
+        })
+    }
+    fn adapt(delta: u32, points: u32, first: bool) -> u32 {
+        let mut delta = if first { delta / 700 } else { delta / 2 };
+        delta += delta / points;
+        let mut k = 0;
+        while delta > ((BASE - T_MIN) * T_MAX) / 2 {
+            delta /= BASE - T_MIN;
+            k += BASE;
+        }
+        k + (BASE - T_MIN + 1) * delta / (delta + 38)
+    }
+    let code_points: Vec<u32> = input.chars().map(u32::from).collect();
+    let mut out: String = input.chars().filter(char::is_ascii).collect();
+    let basic = out.len() as u32;
+    if basic > 0 {
+        out.push('-');
+    }
+    let (mut n, mut delta, mut bias, mut handled) = (128u32, 0u32, 72u32, basic);
+    while (handled as usize) < code_points.len() {
+        let m = code_points.iter().copied().filter(|&c| c >= n).min()?;
+        delta = delta.checked_add((m - n).checked_mul(handled + 1)?)?;
+        n = m;
+        for &c in &code_points {
+            if c < n {
+                delta = delta.checked_add(1)?;
+            }
+            if c == n {
+                let mut q = delta;
+                let mut k = BASE;
+                loop {
+                    let t = if k <= bias {
+                        T_MIN
+                    } else if k >= bias + T_MAX {
+                        T_MAX
+                    } else {
+                        k - bias
+                    };
+                    if q < t {
+                        break;
+                    }
+                    out.push(digit(t + (q - t) % (BASE - t)));
+                    q = (q - t) / (BASE - t);
+                    k += BASE;
+                }
+                out.push(digit(q));
+                bias = adapt(delta, handled + 1, handled == basic);
+                delta = 0;
+                handled += 1;
+            }
+        }
+        delta = delta.checked_add(1)?;
+        n += 1;
+    }
+    Some(out)
 }
 
 fn encode_target(target: &str) -> String {
@@ -330,6 +423,9 @@ pub struct Client {
     /// Optional `http://host:port` proxy used via `CONNECT` for TCP endpoints.
     pub proxy: Option<Url>,
     pub max_body: usize,
+    /// `SO_MARK` for outgoing TCP connections, so the gateway kill switch lets
+    /// them through (needs `CAP_NET_ADMIN`; without it the mark is skipped).
+    pub mark: Option<u32>,
 }
 
 impl Default for Client {
@@ -340,6 +436,7 @@ impl Default for Client {
             total_timeout: Duration::from_secs(90),
             proxy: None,
             max_body: 32 * 1024 * 1024,
+            mark: None,
         }
     }
 }
@@ -411,7 +508,11 @@ impl Client {
         let mut last_err = None;
         for addr in addrs {
             let timeout = self.connect_timeout.min(remaining(deadline)?);
-            match TcpStream::connect_timeout(&addr, timeout) {
+            let connected = match self.mark {
+                Some(mark) => connect_marked(&addr, timeout, mark),
+                None => TcpStream::connect_timeout(&addr, timeout),
+            };
+            match connected {
                 Ok(tcp) => {
                     tcp.set_nodelay(true)?;
                     return Ok(tcp);
@@ -462,6 +563,108 @@ impl Client {
             unreachable!()
         };
         Ok(tcp)
+    }
+}
+
+/// `TcpStream::connect_timeout` with `SO_MARK` set before the SYN leaves: std
+/// cannot configure a socket before connecting, so this is done with libc.
+fn connect_marked(addr: &SocketAddr, timeout: Duration, mark: u32) -> io::Result<TcpStream> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    fn check(ret: libc::c_int) -> io::Result<libc::c_int> {
+        if ret < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(ret)
+        }
+    }
+    // SAFETY: plain socket syscalls on a descriptor owned by `fd`; the sockaddr
+    // structs are fully initialised (zeroed, then every relevant field set) and
+    // passed with their exact sizes.
+    unsafe {
+        let family = if addr.is_ipv4() {
+            libc::AF_INET
+        } else {
+            libc::AF_INET6
+        };
+        let raw = check(libc::socket(
+            family,
+            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+            0,
+        ))?;
+        let fd = OwnedFd::from_raw_fd(raw);
+        let set_mark = libc::setsockopt(
+            fd.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_MARK,
+            (&raw const mark).cast(),
+            std::mem::size_of::<u32>() as libc::socklen_t,
+        );
+        if set_mark != 0 {
+            let err = io::Error::last_os_error();
+            // EPERM: no CAP_NET_ADMIN; ENOPROTOOPT: e.g. qemu-user emulation.
+            if !matches!(err.raw_os_error(), Some(libc::EPERM | libc::ENOPROTOOPT)) {
+                return Err(err);
+            }
+            crate::debug!("cannot set the kill-switch mark ({err}); connecting without it");
+        }
+        let mut storage: libc::sockaddr_storage = std::mem::zeroed();
+        let len = match addr {
+            SocketAddr::V4(a) => {
+                let sin = &mut *(&raw mut storage).cast::<libc::sockaddr_in>();
+                sin.sin_family = libc::AF_INET as libc::sa_family_t;
+                sin.sin_port = a.port().to_be();
+                sin.sin_addr.s_addr = u32::from_ne_bytes(a.ip().octets());
+                std::mem::size_of::<libc::sockaddr_in>()
+            }
+            SocketAddr::V6(a) => {
+                let sin6 = &mut *(&raw mut storage).cast::<libc::sockaddr_in6>();
+                sin6.sin6_family = libc::AF_INET6 as libc::sa_family_t;
+                sin6.sin6_port = a.port().to_be();
+                sin6.sin6_flowinfo = a.flowinfo();
+                sin6.sin6_addr.s6_addr = a.ip().octets();
+                sin6.sin6_scope_id = a.scope_id();
+                std::mem::size_of::<libc::sockaddr_in6>()
+            }
+        };
+        let ret = libc::connect(
+            fd.as_raw_fd(),
+            (&raw const storage).cast(),
+            len as libc::socklen_t,
+        );
+        if ret != 0 {
+            let err = io::Error::last_os_error();
+            if err.raw_os_error() != Some(libc::EINPROGRESS) {
+                return Err(err);
+            }
+            let mut pfd = libc::pollfd {
+                fd: fd.as_raw_fd(),
+                events: libc::POLLOUT,
+                revents: 0,
+            };
+            let millis = timeout.as_millis().clamp(1, libc::c_int::MAX as u128) as libc::c_int;
+            if check(libc::poll(&mut pfd, 1, millis))? == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "connection timed out",
+                ));
+            }
+            let mut so_error: libc::c_int = 0;
+            let mut optlen = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+            check(libc::getsockopt(
+                fd.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_ERROR,
+                (&raw mut so_error).cast(),
+                &mut optlen,
+            ))?;
+            if so_error != 0 {
+                return Err(io::Error::from_raw_os_error(so_error));
+            }
+        }
+        let stream = TcpStream::from(fd);
+        stream.set_nonblocking(false)?;
+        Ok(stream)
     }
 }
 
@@ -835,10 +1038,32 @@ mod tests {
         );
         assert!(Url::parse("ftp://h/").is_err());
         assert!(Url::parse("https://u:p@h/").is_err());
-        assert!(Url::parse("https://пример.рф/").is_err());
+        assert!(Url::parse("https://пример..рф/").is_err());
         assert!(Url::parse("https://a b/").is_err());
         assert!(Url::parse("https://a\r\nX-Evil: 1/").is_err());
         assert!(Url::parse("https://[::1]x/").is_err());
+    }
+
+    #[test]
+    fn internationalised_domains_become_punycode() {
+        // Reference values: RFC 3492 samples and what browsers send.
+        assert_eq!(punycode("пример").as_deref(), Some("e1afmkfd"));
+        assert_eq!(punycode("bücher").as_deref(), Some("bcher-kva"));
+        assert_eq!(punycode("münchen").as_deref(), Some("mnchen-3ya"));
+        assert_eq!(punycode("президент").as_deref(), Some("d1abbgf6aiiy"));
+        let url = Url::parse("https://ПРИМЕР.рф:8443/sub/токен?x=1").unwrap();
+        assert_eq!(url.host, "xn--e1afmkfd.xn--p1ai");
+        assert_eq!(url.host_header(), "xn--e1afmkfd.xn--p1ai:8443");
+        assert_eq!(url.target, "/sub/%D1%82%D0%BE%D0%BA%D0%B5%D0%BD?x=1");
+        assert_eq!(
+            Url::parse("https://sub.пример。рф/").unwrap().host,
+            "sub.xn--e1afmkfd.xn--p1ai"
+        );
+        let base = Url::parse("https://a.com/x").unwrap();
+        assert_eq!(
+            base.with_host("пример.рф").unwrap().host,
+            "xn--e1afmkfd.xn--p1ai"
+        );
     }
 
     #[test]
@@ -1020,6 +1245,23 @@ mod tests {
             .is_err()
         );
         assert!(read_response(&mut Cursor::new(Vec::new()), "GET", 10).is_err());
+    }
+
+    #[test]
+    fn marked_connections_work() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Without CAP_NET_ADMIN the mark is skipped, with it the socket is marked;
+        // either way the connection must behave like a normal one.
+        let mut stream = connect_marked(&addr, Duration::from_secs(2), 0x6d796b).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        stream.write_all(b"ping").unwrap();
+        let mut buf = [0u8; 4];
+        server.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"ping");
+        drop(listener);
+        let closed = connect_marked(&addr, Duration::from_secs(2), 1).unwrap_err();
+        assert_eq!(closed.kind(), io::ErrorKind::ConnectionRefused);
     }
 
     #[test]

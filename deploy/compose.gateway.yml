@@ -21,6 +21,8 @@ services:
     env_file: .env
     environment:
       MIHOMYAK_GATEWAY: "1"
+      # Block app traffic while mihomo is down instead of letting it go direct.
+      # MIHOMYAK_KILL_SWITCH: "1"
     volumes:
       - mihomyak-data:/data
       # Optional fine-tuning (groups, filters, cron…): see examples/config.toml.
