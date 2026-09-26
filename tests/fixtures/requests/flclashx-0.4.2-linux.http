@@ -1,0 +1,9 @@
+GET /sub/abc HTTP/1.1
+user-agent: FlClash X/v0.4.2 core/v1.19.28 Platform/linux
+x-device-model: Ubuntu
+x-ver-os: 24.04
+accept-encoding: gzip
+host: 127.0.0.1:{PORT}
+x-device-os: Linux
+x-hwid: A3B522EAA6F7DD89
+

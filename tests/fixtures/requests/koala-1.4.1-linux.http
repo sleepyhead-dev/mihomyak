@@ -1,0 +1,11 @@
+GET /sub/abc HTTP/1.1
+Accept: application/json, text/plain, */*
+User-Agent: koala-clash/1.4.1
+x-hwid: a3b522eaa6f7dd89
+x-device-os: Linux
+x-ver-os: Ubuntu 24.04
+x-device-model: Ubuntu 24.04.3 LTS
+Accept-Encoding: gzip, compress, deflate, br
+Host: 127.0.0.1:{PORT}
+Connection: keep-alive
+

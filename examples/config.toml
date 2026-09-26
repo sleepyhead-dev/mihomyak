@@ -1,0 +1,108 @@
+# mihomyak configuration: a recommended home-server setup. Every key is optional;
+# where the value below differs from the built-in default, the default is noted.
+#
+# Location: $MIHOMYAK_CONFIG, else /etc/mihomyak/config.toml (root) or
+# ~/.config/mihomyak/config.toml. In Docker: /data/config.toml.
+# Environment variables (MIHOMYAK_*) override this file; see docs/CONFIG.md.
+# Keep it private: `chmod 600` — it contains your subscription link.
+
+[subscription]
+url = "https://sub.example.com/REPLACE_ME"
+# Client to impersonate, byte for byte:
+#   flclashx — FlClashX 0.4.2 (default; every panel answers with mihomo YAML)
+#   koala    — Koala Clash 1.4.1
+#   happ     — Happ Desktop 4.3.0 (panel answers with links or Xray JSON)
+#   custom   — your own user_agent
+client = "flclashx"
+# app_version = "0.4.2"          # follow a newer client release without rebuilding
+# app_build = "2609151457"       # Happ: build id in the UA (x64; arm64 ends in …456)
+# core_version = "v1.19.28"      # FlClashX: core/<ver> in the UA and mihomo global-ua
+# user_agent = "…"               # replace only the User-Agent value
+# headers = ["X-Extra: value"]   # add/replace headers (placed as the client would)
+# proxy = "http://127.0.0.1:8080"  # fetch the subscription through an HTTP proxy
+# accept_stub = false            # apply "App not supported"-style placeholder configs
+
+[update]
+# "auto" = provider's profile-update-interval (else 24h) · "off" · or e.g. "6h" (min 5m)
+interval = "auto"
+# Fixed times in local time (TZ env), 5-field cron. Missed runs are caught up.
+cron = ["0 5 * * *"]             # default: []
+# Refetch at every start (the cache is used meanwhile, so the network is up at once).
+on_start = true                  # default: false
+
+[filter]
+# Node names, case-insensitive globs (* and ?). Applied on every update.
+include = []                     # empty = keep everything
+exclude = ["*Россия*", "*Info*", "*осталось*"]   # default: []
+
+# Auto-switching groups built from node names, in priority order (default: none).
+[[groups]]
+name = "Auto"
+type = "fallback"                # fallback | url-test | load-balance | select
+nodes = ["*🇳🇱*", "*🇩🇪*", "*🇫🇮*"]
+url = "https://www.gstatic.com/generate_204"
+interval = "3m"
+default = true                   # selectors use this group by default
+
+# [[groups]]
+# name = "Fastest"
+# type = "url-test"
+# nodes = []                     # empty = every node
+# tolerance = 50
+
+[rules]
+# Built-in rule sets: "ru-direct" (Russian domains/IPs bypass the proxy).
+presets = ["ru-direct"]          # default: []
+# Your own rules, evaluated before the subscription's (default: []).
+prepend = [
+    "DOMAIN-SUFFIX,lan,DIRECT",
+    # "DOMAIN-SUFFIX,example.com,Auto",
+]
+
+[device]
+# HWID seed; default: generated once and stored in the data directory.
+# Reuse another machine's value to keep its device slot.
+# machine_id = "0d0af05ee8fd4dc29275718f2ce4dff1"
+# hwid = "A3B522EAA6F7DD89"      # final x-hwid, bypassing the client formula
+send_headers = true              # x-hwid / x-device-* headers
+os_release = "/etc/os-release"   # distro reported in device headers
+# os_name = "Ubuntu"
+# os_version = "24.04"
+# os_pretty_name = "Ubuntu 24.04.3 LTS"
+# hostname = "home-server"       # Happ: X-Device-Model = <hostname>_<arch>
+locale = "en"                    # Happ: X-Device-Locale / Accept-Language
+
+[core]
+bin = "mihomo"
+controller = "127.0.0.1:9090"    # or "unix:/path/to/mihomo.sock"
+# secret = "…"                   # default: generated and stored
+mixed_port = 7890                # HTTP + SOCKS5
+allow_lan = false                # accept other hosts/containers
+# In Docker, 172.16.0.0/12 covers every container on the host: narrow it or set auth.
+lan_allowed_ips = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10",
+                   "127.0.0.0/8", "fc00::/7", "fe80::/10", "::1/128"]
+auth = []                        # ["user:long-random-password"]; loopback needs none
+bind_address = "*"
+log_level = "warning"
+mode = "rule"                    # rule | global | direct (`mihomyak mode` persists changes)
+# memory_limit = "64MiB"         # GOMEMLIMIT for mihomo on small devices
+# geodata_dir = "/root/.config/mihomo"
+
+[gateway]
+# Transparent proxy for everything routed through this network namespace (TUN).
+enable = false
+stack = "system"                 # system (lightest) | gvisor | mixed
+auto_redirect = false            # nftables TCP redirect (faster, needs nf_tables)
+dns_listen = "127.0.0.1:1053"
+# Block traffic that would bypass mihomo while it is down (needs iptables and
+# CAP_NET_ADMIN). DNS, private networks and mihomo/mihomyak themselves stay allowed.
+kill_switch = false
+
+# Raw mihomo keys, deep-merged last (anything mihomo supports; unlike the
+# subscription, this file is trusted).
+[mihomo]
+# ipv6 = false
+# unified-delay = true
+# tcp-concurrent = true
+# external-ui = "ui"
+# external-ui-url = "https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip"

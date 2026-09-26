@@ -1,6 +1,2 @@
-reorder_imports = true
-reorder_modules = true
-merge_derives = true
+# Everything else is rustfmt's default (max_width 100, 4 spaces).
 use_field_init_shorthand = true
-tab_spaces = 4
-max_width = 100

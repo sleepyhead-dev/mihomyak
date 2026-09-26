@@ -1,0 +1,34 @@
+mixed-port: 7890
+socks-port: 7891
+redir-port: 7892
+allow-lan: true
+mode: global
+log-level: info
+external-controller: 127.0.0.1:9090
+dns:
+  enable: true
+  use-hosts: true
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  default-nameserver: [1.1.1.1, 8.8.8.8]
+  nameserver: [1.1.1.1, 8.8.8.8]
+proxies:
+  - name: 🇳🇱 NL
+    type: vless
+    server: nl.example.com
+    port: 443
+    network: tcp
+    udp: true
+    uuid: 11111111-2222-3333-4444-555555555555
+    packet-encoding: xudp
+    flow: xtls-rprx-vision
+    tls: true
+    servername: www.google.com
+    reality-opts: {public-key: Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBrjqnAw, short-id: 6ba85179e30d4fc2}
+    client-fingerprint: chrome
+proxy-groups:
+  - name: '→ Remnawave'
+    type: select
+    proxies: [🇳🇱 NL]
+rules:
+  - MATCH,→ Remnawave

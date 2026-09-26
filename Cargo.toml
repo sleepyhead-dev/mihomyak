@@ -1,44 +1,54 @@
 [package]
-name = "mihoro"
-description = "Mihomo CLI client on Linux."
-version = "0.14.0"
-edition = "2021"
-readme = "README.md"
+name = "mihomyak"
+description = "Lightweight mihomo supervisor for CIS-style subscriptions that emulates FlClashX / Koala Clash / Happ."
+publish = false
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
 license = "MIT"
-authors = ["spencerwooo <spencer.woo@outlook.com>"]
-homepage = "https://github.com/spencerwooo/mihoro"
-repository = "https://github.com/spencerwooo/mihoro"
-keywords = ["cli", "clash", "network", "linux", "mihomo"]
-categories = ["command-line-utilities"]
+readme = "README.md"
+repository = "https://github.com/sleepyhead-dev/mihomyak"
+keywords = ["mihomo", "clash", "proxy", "subscription", "remnawave"]
+categories = ["command-line-utilities", "network-programming"]
 
 [features]
-default = ["self_update"]
-self_update = ["dep:self_update"]
+default = ["tui"]
+# Interactive terminal UI (`mihomyak tui`). Disable for the smallest possible binary.
+tui = ["dep:ratatui"]
 
 [dependencies]
-clap = { version = "4.5", features = ["derive"] }
-clap_complete = "4.5"
-colored = "3.0"
-serde = { version = "1.0", features = ["derive"] }
-toml = "0.8"
-flate2 = "1.1"
-shellexpand = "3.1"
-openssl = { version = "0.10", features = ["vendored"] }
-serde_yaml = "0.9"
-local-ip-address = "0.6"
-reqwest = { version = "0.12", features = ["stream"] }
-futures-util = "0.3"
-indicatif = "0.17"
-tokio = { version = "1.44", features = ["full"] }
-tokio-retry = "0.3"
-truncatable = "0.1"
-anyhow = "1.0"
+anyhow = "1"
 base64 = "0.22"
-tempfile = "3.18"
-tar = "0.4"
-dialoguer = { version = "0.11", default-features = false }
-self_update = { version = "0.42", default-features = false, features = [
-    "archive-tar",
-    "compression-flate2",
-    "rustls",
-], optional = true }
+brotli-decompressor = "5"
+clap = { version = "4.5", default-features = false, features = [
+    "std",
+    "derive",
+    "help",
+    "usage",
+    "error-context",
+    "env",
+    "color",
+    "wrap_help",
+] }
+flate2 = "1"
+libc = "0.2"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"], optional = true }
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+ruzstd = { version = "0.9", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_norway = "0.9"
+signal-hook = { version = "0.3", default-features = false, features = ["iterator"] }
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+webpki-roots = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

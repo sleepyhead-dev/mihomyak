@@ -1,0 +1,55 @@
+# Explicit HTTP/SOCKS5 proxy for containers on a private Docker network.
+#
+# Apps opt in with HTTP(S)_PROXY / ALL_PROXY. The proxy port is not published
+# to the host; LAN access is limited to private ranges and optionally a password.
+#
+#   cp deploy/.env.example deploy/.env && chmod 600 deploy/.env && $EDITOR deploy/.env
+#   docker compose -f deploy/compose.proxy.yml up -d
+
+services:
+  mihomyak:
+    image: ghcr.io/sleepyhead-dev/mihomyak:latest
+    # Built from this repository when the image cannot be pulled.
+    build: ..
+    container_name: mihomyak
+    hostname: ${MIHOMYAK_HOSTNAME:-home-server}
+    restart: unless-stopped
+    # Relative to this file: deploy/.env.
+    env_file: .env
+    environment:
+      MIHOMYAK_ALLOW_LAN: "1"
+      # MIHOMYAK_PROXY_AUTH: "user:long-random-password"
+    volumes:
+      - mihomyak-data:/data
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    # mihomo idles at ~40 MiB; the cap keeps a runaway core from starving the host.
+    mem_limit: 256m
+    pids_limit: 256
+    # Leaves mihomo time to remove its routes (the supervisor waits 8 s for it).
+    stop_grace_period: 15s
+    networks: [proxied]
+    # Uncomment to use the proxy from the host itself (loopback only):
+    # ports: ["127.0.0.1:7890:7890"]
+
+  app:
+    image: curlimages/curl
+    command: ["sh", "-c", "sleep infinity"]
+    environment:
+      HTTP_PROXY: http://mihomyak:7890
+      HTTPS_PROXY: http://mihomyak:7890
+      ALL_PROXY: socks5h://mihomyak:7890
+      NO_PROXY: localhost,127.0.0.1
+    networks: [proxied]
+    depends_on:
+      mihomyak:
+        condition: service_healthy
+
+networks:
+  proxied:
+    internal: false
+
+volumes:
+  mihomyak-data:

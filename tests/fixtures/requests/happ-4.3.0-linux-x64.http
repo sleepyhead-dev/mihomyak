@@ -1,0 +1,13 @@
+GET /sub/abc HTTP/1.1
+Host: 127.0.0.1:{PORT}
+User-Agent: Happ/4.3.0/Linux/2609151457698
+X-App-Version: 4.3.0
+X-Device-Locale: EN
+X-Device-Os: Linux
+X-Device-Model: rpi-box_x86_64
+X-Hwid: 11112222333344445555666677778888
+X-Ver-Os: ubuntu_24.04
+Connection: Keep-Alive
+Accept-Encoding: zstd, br, gzip, deflate
+Accept-Language: en,*
+
