@@ -28,6 +28,8 @@ before `docs: research how CIS subscription panels…` is mihoro's).
 ## Commands
 
 ```sh
+make check                                   # = fmt check + both clippy runs + tests + rustdoc
+make e2e                                     # docker build + scripts/e2e-docker.sh
 cargo fmt --all
 cargo clippy --all-targets -- -D warnings
 cargo clippy --all-targets --no-default-features -- -D warnings   # without TUI
@@ -39,13 +41,19 @@ cargo deny check                             # supply chain (cargo install cargo
 ./scripts/build-static.sh aarch64-unknown-linux-musl   # static ARM build (clang + rust-lld)
 docker buildx build --platform linux/arm64 -t mihomyak .
 python3 dev/mock_panel.py --port 8080 --device-limit 1   # fake Remnawave for e2e
+./scripts/e2e-docker.sh mihomyak:local       # hardened containers vs the mock panel
 ```
 
-CI (`.github/workflows/ci.yml`) runs all of the above except the mock-panel e2e;
-`release.yml` reuses it, checks that the tag matches `Cargo.toml`, then publishes
-static tarballs and a multi-arch GHCR image on `v*` tags. No run of the GitHub
-workflows has been observed yet (GitHub was not reachable from the dev sandbox),
-so expect to fix small issues on the first run.
+CI (`.github/workflows/ci.yml`, on PRs and `main`) runs all of the above, including
+the Docker e2e script, uploads static binaries as artifacts and, on `main`,
+publishes `ghcr.io/sleepyhead-dev/mihomyak:edge`. `release.yml` (tags `vX.Y.Z`)
+reuses CI, checks the tag against `Cargo.toml`, and publishes a GitHub release
+(tarballs, SHA256SUMS, notes from the CHANGELOG section) and the `X.Y.Z`/`latest`
+image. To release: move the `[Unreleased]` notes under `## [X.Y.Z] - date`, bump
+`Cargo.toml`, commit, `git tag vX.Y.Z && git push --tags`.
+
+The CLI help is assembled in `src/cli.rs::command()`: new subcommands must be added
+to `GROUPS` (a test enforces it).
 
 ## Layout
 

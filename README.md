@@ -34,9 +34,14 @@ Marzban, PasarGuard, 3x-ui. Его задача — стабильно полу�
 ```sh
 git clone https://github.com/sleepyhead-dev/mihomyak && cd mihomyak/deploy
 cp .env.example .env && chmod 600 .env && $EDITOR .env   # MIHOMYAK_SUB_URL=…
-docker compose -f compose.gateway.yml up -d
+docker compose -f compose.gateway.yml up -d               # или up -d --build
 docker compose -f compose.gateway.yml exec mihomyak mihomyak status
 ```
+
+Образ `ghcr.io/sleepyhead-dev/mihomyak` собирает CI (`latest` — последний релиз,
+`edge` — ветка `main`). Пока репозиторий приватный, перед `pull` нужен
+`docker login ghcr.io` с токеном `read:packages`. Либо соберите образ на месте:
+`docker compose … up -d --build`.
 
 Любой контейнер с `network_mode: service:mihomyak` ходит в сеть через прокси, включая
 DNS. Другие сценарии (явный HTTP/SOCKS-прокси, шлюз для LAN, ARM) описаны в
@@ -44,8 +49,12 @@ DNS. Другие сценарии (явный HTTP/SOCKS-прокси, шлюз
 
 ## Без Docker
 
+Готовые статические бинарники для x86_64, aarch64 и armv7 лежат в
+[релизах](https://github.com/sleepyhead-dev/mihomyak/releases) (с `SHA256SUMS`).
+Или соберите сами:
+
 ```sh
-./scripts/build-static.sh aarch64-unknown-linux-musl     # или скачать релиз
+./scripts/build-static.sh aarch64-unknown-linux-musl     # или make static
 sudo install -m 755 target/aarch64-unknown-linux-musl/release/mihomyak /usr/local/bin/
 sudo mihomyak core install --dest /usr/local/bin/mihomo  # mihomo с GitHub
 sudo install -D -m 600 examples/config.toml /etc/mihomyak/config.toml  # вписать url
@@ -53,6 +62,9 @@ sudo cp contrib/mihomyak.service /etc/systemd/system/ && sudo systemctl enable -
 ```
 
 ## Команды
+
+`mihomyak --help` показывает команды по группам с примерами,
+`mihomyak <команда> --help` — подробности.
 
 | Команда | Что делает |
 |---------|------------|
@@ -120,6 +132,22 @@ presets = ["ru-direct"]
   важно, только если панель стоит за антибот-защитой, проверяющей отпечаток.
 - Зашифрованные ссылки `happ://crypt…` не поддерживаются. Домены вроде `.рф`
   переводятся в punycode автоматически, как в браузере.
+
+## Разработка
+
+```sh
+make check        # fmt, clippy (с TUI и без), тесты, rustdoc — как в CI
+make e2e          # собрать образ и прогнать контейнеры против мок-панели
+make static TARGET=armv7-unknown-linux-musleabihf
+```
+
+CI (GitHub Actions) на каждый PR и push в `main`: линтеры, тесты (с проверкой
+конфигов настоящим `mihomo -t`), MSRV 1.88, статические сборки под три архитектуры
+(скачиваются как артефакты), аудит зависимостей, e2e в Docker. Push в `main`
+публикует образ `:edge`. Тег `vX.Y.Z` (совпадающий с версией в `Cargo.toml`)
+выпускает релиз: бинарники, `SHA256SUMS`, заметки из `CHANGELOG.md` и образ
+`:X.Y.Z`/`:latest`. Подробности для разработчиков и AI-агентов — в
+[AGENTS.md](AGENTS.md).
 
 ## Документация
 

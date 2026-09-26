@@ -130,11 +130,24 @@ docker logs -f mihomyak
 `[mihomo]` ключи `external-ui`/`external-ui-url`, выставьте `core.controller` наружу
 (секрет обязателен) и опубликуйте порт только на доверенный интерфейс.
 
+## Образы и теги
+
+| Тег | Откуда |
+|-----|--------|
+| `latest`, `X.Y.Z`, `X.Y` | релизы (git-тег `vX.Y.Z`) |
+| `edge`, `sha-<commit>` | каждый push в `main` |
+
+Платформы: `linux/amd64`, `linux/arm64`, `linux/arm/v7`. Пока репозиторий
+приватный, пакет в GHCR тоже приватный: `docker login ghcr.io -u <user>` с
+personal access token (право `read:packages`). Либо сделайте пакет публичным в
+настройках пакета на GitHub.
+
 ## Сборка образа
 
 ```sh
 docker buildx build --platform linux/arm64,linux/amd64 -t mihomyak .
 docker buildx build --build-arg MIHOMO_VERSION=v1.19.31 --load -t mihomyak .
+make e2e      # собрать образ и проверить его против мок-панели
 ```
 
 Сборочной стадии нужен доступ к `dl-cdn.alpinelinux.org` (пакеты clang/lld),

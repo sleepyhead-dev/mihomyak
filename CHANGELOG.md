@@ -53,6 +53,11 @@ First version of mihomyak (a rewrite of the mihoro fork).
   of mihomo/mihomyak may leave; installed atomically with iptables-restore.
 - Internationalised subscription hosts (`.рф`) are converted to punycode.
 
+- Grouped, coloured `--help` with examples; `--version` lists emulated clients.
+- CI/CD: static builds for three architectures, Docker e2e test, `edge` image
+  from `main`, releases with binaries and a multi-arch image; `Makefile` and
+  `scripts/e2e-docker.sh` for local runs.
+
 ### Changed
 - FlClashX header order is computed with a model of Dart's `HashMap` for any
   header set; os-release is parsed the device_info_plus way (with lsb-release
