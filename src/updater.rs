@@ -180,11 +180,17 @@ impl Updater {
         self.follow_new_domain(&fetch, &analysis, meta);
         let body = &fetch.response.body;
         let source = self.source_id()?;
+        // Gateway mode routes the panel around the tunnel by host and address, so
+        // the config is rebuilt when those move too.
+        let panel_hosts = fetch.hosts();
+        let panel_ips = routable(&fetch.peers);
         let changed = meta.format.is_empty()
             || meta.client != source
+            || meta.panel_hosts != panel_hosts
+            || meta.panel_ips != panel_ips
             || self.store.load_body().as_deref() != Some(body.as_slice());
         if changed {
-            let built = match self.build(content) {
+            let built = match self.build_with(content, &panel_hosts, &panel_ips) {
                 Ok(built) => built,
                 Err(e) => return Ok(Outcome::Kept(Problem::Invalid(format!("{e:#}")))),
             };
@@ -200,8 +206,8 @@ impl Updater {
         meta.client = source;
         meta.format = content.format.as_str().to_owned();
         meta.proxies = content.endpoints.len();
-        meta.panel_hosts = fetch.hosts();
-        meta.panel_ips = fetch.peers.clone();
+        meta.panel_hosts = panel_hosts;
+        meta.panel_ips = panel_ips;
         Ok(Outcome::Applied {
             changed,
             info: analysis.info,
@@ -292,16 +298,25 @@ impl Updater {
     }
 
     fn build(&self, content: &subscription::Content) -> Result<Built> {
+        let meta = self.store.load_meta().unwrap_or_default();
+        self.build_with(content, &meta.panel_hosts, &meta.panel_ips)
+    }
+
+    fn build_with(
+        &self,
+        content: &subscription::Content,
+        panel_hosts: &[String],
+        panel_ips: &[IpAddr],
+    ) -> Result<Built> {
         let mode = self
             .store
             .mode()
             .unwrap_or_else(|| self.config.core.mode.clone());
-        let meta = self.store.load_meta().unwrap_or_default();
         let params = Params {
             secret: &self.secret,
             mode: &mode,
-            panel_hosts: &meta.panel_hosts,
-            panel_ips: &meta.panel_ips,
+            panel_hosts,
+            panel_ips,
         };
         crate::profile::build(content, &self.config, &params)
     }
@@ -464,6 +479,16 @@ fn last_error_line(log: &str) -> String {
     crate::util::sanitize(msg)
 }
 
+/// Panel addresses worth a route exclusion: not loopback/unspecified, and not a
+/// fake-ip answer (198.18.0.0/15) that only exists inside the tunnel.
+fn routable(ips: &[IpAddr]) -> Vec<IpAddr> {
+    ips.iter()
+        .copied()
+        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+        .filter(|ip| !matches!(ip, IpAddr::V4(v4) if v4.octets()[0] == 198 && v4.octets()[1] & 0xfe == 18))
+        .collect()
+}
+
 /// A bare DNS host name (optionally `:port`): no scheme, path, credentials or IP literal.
 fn is_plain_host(value: &str) -> bool {
     let host = match value.rsplit_once(':') {
@@ -501,6 +526,23 @@ pub fn describe(info: &ProviderInfo, proxies: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panel_addresses_worth_excluding() {
+        let ips: Vec<IpAddr> = [
+            "203.0.113.7",
+            "127.0.0.1",
+            "198.18.0.4",
+            "198.19.1.1",
+            "::1",
+            "2001:db8::1",
+        ]
+        .iter()
+        .map(|ip| ip.parse().unwrap())
+        .collect();
+        let kept: Vec<String> = routable(&ips).iter().map(ToString::to_string).collect();
+        assert_eq!(kept, ["203.0.113.7", "2001:db8::1"]);
+    }
 
     #[test]
     fn plain_hosts() {
