@@ -50,7 +50,10 @@ publishes `ghcr.io/sleepyhead-dev/mihomyak:edge`. `release.yml` (tags `vX.Y.Z`)
 reuses CI, checks the tag against `Cargo.toml`, and publishes a GitHub release
 (tarballs, SHA256SUMS, notes from the CHANGELOG section) and the `X.Y.Z`/`latest`
 image. To release: move the `[Unreleased]` notes under `## [X.Y.Z] - date`, bump
-`Cargo.toml`, commit, `git tag vX.Y.Z && git push --tags`.
+`Cargo.toml`, merge to `main`, then either push a tag `vX.Y.Z` or run
+Actions → Release → "Run workflow" on `main` (it creates the tag itself after CI).
+Claude Code cloud sessions cannot push tags (the git proxy allows only the session
+branch), so they use the second way via the GitHub API.
 
 The CLI help is assembled in `src/cli.rs::command()`: new subcommands must be added
 to `GROUPS` (a test enforces it).

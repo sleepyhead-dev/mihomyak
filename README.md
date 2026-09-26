@@ -144,9 +144,9 @@ make static TARGET=armv7-unknown-linux-musleabihf
 CI (GitHub Actions) на каждый PR и push в `main`: линтеры, тесты (с проверкой
 конфигов настоящим `mihomo -t`), MSRV 1.88, статические сборки под три архитектуры
 (скачиваются как артефакты), аудит зависимостей, e2e в Docker. Push в `main`
-публикует образ `:edge`. Тег `vX.Y.Z` (совпадающий с версией в `Cargo.toml`)
-выпускает релиз: бинарники, `SHA256SUMS`, заметки из `CHANGELOG.md` и образ
-`:X.Y.Z`/`:latest`. Подробности для разработчиков и AI-агентов — в
+публикует образ `:edge`. Релиз выпускается тегом `vX.Y.Z` (совпадающим с версией в
+`Cargo.toml`) или кнопкой Actions → Release → Run workflow (тег создаётся сам):
+бинарники, `SHA256SUMS`, заметки из `CHANGELOG.md` и образ `:X.Y.Z`/`:latest`. Подробности для разработчиков и AI-агентов — в
 [AGENTS.md](AGENTS.md).
 
 ## Документация
