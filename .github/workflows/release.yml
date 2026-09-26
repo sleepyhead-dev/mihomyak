@@ -1,5 +1,11 @@
 name: Release
 
+# Push a tag `vX.Y.Z` matching Cargo.toml to publish:
+#   * a GitHub release with static binaries for x86_64, aarch64 and armv7,
+#     SHA256SUMS and the CHANGELOG section as notes;
+#   * the multi-arch image ghcr.io/<owner>/mihomyak:{X.Y.Z, X.Y, latest}.
+# Everything waits for the full CI suite.
+
 on:
   push:
     tags: ["v*"]
@@ -14,6 +20,9 @@ jobs:
   ci:
     name: CI
     uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      packages: write
 
   version:
     name: Tag matches Cargo.toml
@@ -28,7 +37,7 @@ jobs:
           fi
 
   binaries:
-    name: Binary ${{ matrix.target }}
+    name: Package ${{ matrix.target }}
     needs: [ci, version]
     runs-on: ubuntu-latest
     strategy:
@@ -48,14 +57,13 @@ jobs:
         run: |
           name="mihomyak-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir "$name"
-          cp "target/${{ matrix.target }}/release/mihomyak" README.md LICENSE "$name/"
-          cp -r examples contrib "$name/"
+          cp "target/${{ matrix.target }}/release/mihomyak" README.md LICENSE CHANGELOG.md "$name/"
+          cp -r examples contrib deploy "$name/"
           tar czf "$name.tar.gz" "$name"
-          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: mihomyak-*.tar.gz*
+          path: mihomyak-*.tar.gz
           if-no-files-found: error
 
   publish:
@@ -65,14 +73,29 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
+          path: dist
           merge-multiple: true
+      - name: Checksums and notes
+        run: |
+          cd dist && sha256sum mihomyak-*.tar.gz > SHA256SUMS && cat SHA256SUMS && cd ..
+          # The CHANGELOG section of this version, else the Unreleased one.
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            /^## \[/ { if (found) exit; found = ($0 ~ "\\[" v "\\]") }
+            found' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            awk '/^## \[Unreleased\]/ {found=1; next} /^## \[/ {if (found) exit} found' CHANGELOG.md > notes.md
+          fi
       - uses: softprops/action-gh-release@v2
         with:
+          body_path: notes.md
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
-            mihomyak-*.tar.gz
-            mihomyak-*.tar.gz.sha256
+            dist/mihomyak-*.tar.gz
+            dist/SHA256SUMS
 
   image:
     name: Container image
@@ -81,8 +104,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write
-      attestations: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -106,7 +127,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          provenance: true
-          sbom: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=multiarch
+          cache-to: type=gha,scope=multiarch,mode=max

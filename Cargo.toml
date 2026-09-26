@@ -27,6 +27,8 @@ clap = { version = "4.5", default-features = false, features = [
     "usage",
     "error-context",
     "env",
+    "color",
+    "wrap_help",
 ] }
 flate2 = "1"
 libc = "0.2"
