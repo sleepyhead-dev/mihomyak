@@ -1,7 +1,7 @@
 //! Command-line interface: clap definitions plus the styled, grouped help.
 //!
 //! clap cannot group subcommands under headings, so the top-level help is a
-//! template assembled from the subcommands' own descriptions ([`GROUPS`]); a
+//! template assembled from the subcommands' own descriptions (`GROUPS`); a
 //! test makes sure every command is listed.
 
 use std::fmt::Write as _;
