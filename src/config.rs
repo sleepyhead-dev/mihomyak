@@ -203,6 +203,16 @@ impl std::str::FromStr for Preset {
     }
 }
 
+impl std::fmt::Display for Interval {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Auto => f.write_str("auto"),
+            Self::Off => f.write_str("off"),
+            Self::Fixed(d) => f.write_str(&crate::util::fmt_duration(*d)),
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for Interval {
     fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
         let raw = String::deserialize(de)?;
@@ -662,6 +672,13 @@ fn is_root() -> bool {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn shipped_example_is_valid() {
+        let config: Config = toml::from_str(include_str!("../examples/config.toml")).unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.groups[0].name, "Auto");
+    }
 
     #[test]
     fn parses_full_file() {

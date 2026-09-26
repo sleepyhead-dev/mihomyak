@@ -223,7 +223,7 @@ fn check(config: Config) -> Result<ExitCode> {
     );
     println!("subscription: {}", subscription::redact(&updater.url()?));
     println!(
-        "update:       interval {:?}, cron {:?}, on start: {}",
+        "update:       interval {}, cron {:?}, on start: {}",
         cfg.update.interval, cfg.update.cron, cfg.update.on_start
     );
     println!(

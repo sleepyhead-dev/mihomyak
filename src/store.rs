@@ -40,7 +40,7 @@ pub struct SubscriptionMeta {
     /// Cache key `<client>:<sha256(url)[..16]>`: the body is reused only for the
     /// same subscription URL and emulated client.
     pub client: String,
-    /// `mihomo` or `links`.
+    /// Body format: `mihomo`, `links` or `xray-json` (empty forces a rebuild).
     pub format: String,
     /// Number of proxies found in the stored body.
     pub proxies: usize,

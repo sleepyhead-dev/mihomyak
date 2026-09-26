@@ -1,4 +1,5 @@
-# mihomyak configuration — every key is optional; defaults are shown.
+# mihomyak configuration: a recommended home-server setup. Every key is optional;
+# where the value below differs from the built-in default, the default is noted.
 #
 # Location: $MIHOMYAK_CONFIG, else /etc/mihomyak/config.toml (root) or
 # ~/.config/mihomyak/config.toml. In Docker: /data/config.toml.
@@ -14,25 +15,27 @@ url = "https://sub.example.com/REPLACE_ME"
 #   custom   — your own user_agent
 client = "flclashx"
 # app_version = "0.4.2"          # follow a newer client release without rebuilding
+# app_build = "2609151457"       # Happ: build id in the UA (x64; arm64 ends in …456)
+# core_version = "v1.19.28"      # FlClashX: core/<ver> in the UA and mihomo global-ua
 # user_agent = "…"               # replace only the User-Agent value
-# headers = ["X-Extra: value"]   # add/replace headers (kept in emulated order)
+# headers = ["X-Extra: value"]   # add/replace headers (placed as the client would)
 # proxy = "http://127.0.0.1:8080"  # fetch the subscription through an HTTP proxy
 # accept_stub = false            # apply "App not supported"-style placeholder configs
 
 [update]
-# "auto" = provider's profile-update-interval (else 24h) · "off" · or e.g. "6h"
+# "auto" = provider's profile-update-interval (else 24h) · "off" · or e.g. "6h" (min 5m)
 interval = "auto"
 # Fixed times in local time (TZ env), 5-field cron. Missed runs are caught up.
-cron = ["0 5 * * *"]
+cron = ["0 5 * * *"]             # default: []
 # Refetch at every start (the cache is used meanwhile, so the network is up at once).
-on_start = true
+on_start = true                  # default: false
 
 [filter]
 # Node names, case-insensitive globs (* and ?). Applied on every update.
 include = []                     # empty = keep everything
-exclude = ["*Россия*", "*Info*", "*осталось*"]
+exclude = ["*Россия*", "*Info*", "*осталось*"]   # default: []
 
-# Auto-switching groups built from node names, in priority order.
+# Auto-switching groups built from node names, in priority order (default: none).
 [[groups]]
 name = "Auto"
 type = "fallback"                # fallback | url-test | load-balance | select
@@ -49,8 +52,8 @@ default = true                   # selectors use this group by default
 
 [rules]
 # Built-in rule sets: "ru-direct" (Russian domains/IPs bypass the proxy).
-presets = ["ru-direct"]
-# Your own rules, evaluated before the subscription's.
+presets = ["ru-direct"]          # default: []
+# Your own rules, evaluated before the subscription's (default: []).
 prepend = [
     "DOMAIN-SUFFIX,lan,DIRECT",
     # "DOMAIN-SUFFIX,example.com,Auto",
@@ -75,9 +78,10 @@ controller = "127.0.0.1:9090"    # or "unix:/path/to/mihomo.sock"
 # secret = "…"                   # default: generated and stored
 mixed_port = 7890                # HTTP + SOCKS5
 allow_lan = false                # accept other hosts/containers
+# In Docker, 172.16.0.0/12 covers every container on the host: narrow it or set auth.
 lan_allowed_ips = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10",
                    "127.0.0.0/8", "fc00::/7", "fe80::/10", "::1/128"]
-auth = []                        # ["user:long-random-password"]
+auth = []                        # ["user:long-random-password"]; loopback needs none
 bind_address = "*"
 log_level = "warning"
 mode = "rule"                    # rule | global | direct (`mihomyak mode` persists changes)
@@ -91,7 +95,8 @@ stack = "system"                 # system (lightest) | gvisor | mixed
 auto_redirect = false            # nftables TCP redirect (faster, needs nf_tables)
 dns_listen = "127.0.0.1:1053"
 
-# Raw mihomo keys, deep-merged last (anything mihomo supports).
+# Raw mihomo keys, deep-merged last (anything mihomo supports; unlike the
+# subscription, this file is trusted).
 [mihomo]
 # ipv6 = false
 # unified-delay = true
