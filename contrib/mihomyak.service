@@ -15,6 +15,9 @@ ExecStart=/usr/local/bin/mihomyak run
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s
+# SIGTERM to mihomyak only; it stops mihomo (routes cleaned up) within 8 s.
+KillMode=mixed
+TimeoutStopSec=15s
 Environment=MIHOMYAK_CORE_BIN=/usr/local/bin/mihomo
 StateDirectory=mihomyak
 StateDirectoryMode=0700
@@ -27,9 +30,18 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+# TUN auto-route writes routing sysctls.
 ProtectKernelTunables=no
 ProtectKernelModules=yes
+ProtectKernelLogs=yes
 ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+DevicePolicy=closed
+DeviceAllow=/dev/net/tun rw
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
 RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes

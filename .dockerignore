@@ -1,8 +1,5 @@
-target/
-.git/
-.github/
-docs/
-dev/
-deploy/
-tests/
-*.md
+# Only what the build stage needs: keeps secrets (.env, data dirs) out of the context.
+*
+!Cargo.toml
+!Cargo.lock
+!src/

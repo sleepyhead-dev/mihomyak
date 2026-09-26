@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # release.yml runs the whole suite before publishing anything.
+  workflow_call:
 
 permissions:
   contents: read
@@ -33,6 +35,18 @@ jobs:
           echo "MIHOMYAK_TEST_MIHOMO=$PWD/mihomo" >> "$GITHUB_ENV"
       - run: cargo test --locked
       - run: cargo test --locked --no-default-features
+      - run: cargo doc --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  msrv:
+    name: MSRV (rust-version in Cargo.toml)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
 
   cross:
     name: Build ${{ matrix.target }}
@@ -55,6 +69,8 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y clang lld musl-tools
       - name: Build
         run: ./scripts/build-static.sh ${{ matrix.target }}
+        env:
+          RUSTFLAGS: -D warnings
 
   deny:
     name: Dependency audit

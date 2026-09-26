@@ -1,0 +1,1 @@
+tests/fixtures/requests/*.http -text
