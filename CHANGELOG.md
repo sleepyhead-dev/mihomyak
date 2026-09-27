@@ -11,6 +11,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
   mihomo's fake-ip. `compose.gateway.yml` now sets `dns:` on the gateway, and
   mihomyak warns at start and in `check` when Docker forwards past the tunnel.
   Found on a Raspberry Pi 3B+ (Docker 29.8); covered by the Docker e2e test.
+- Apps behind a restarted gateway (`docker compose restart mihomyak`) were left
+  in the old network namespace without any network. The example app in
+  `compose.gateway.yml` now has `depends_on: … restart: true`, so Compose
+  restarts it after the gateway; documented in docs/DOCKER.md.
 
 ### Changed
 - CI: images pack the static binaries of the build job instead of compiling

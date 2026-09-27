@@ -9,6 +9,13 @@
 
 name: mhk
 
+# Clients follow the gateway: a restarted gateway gets a new network namespace
+# and clients left in the old one have no network (Compose restarts them).
+x-behind-gw: &behind-gw
+  network_mode: service:mhk-gw
+  depends_on:
+    mhk-gw: {condition: service_healthy, restart: true}
+
 x-limits: &limits
   mem_limit: 256m
   pids_limit: 256
@@ -47,23 +54,19 @@ services:
     image: curlimages/curl:latest
     container_name: mhk-app1
     command: ["sleep", "infinity"]
-    network_mode: service:mhk-gw
-    depends_on: [mhk-gw]
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
-    <<: *limits
+    <<: [*behind-gw, *limits]
 
   mhk-app2:
     image: alpine:3.22
     container_name: mhk-app2
     command: ["sleep", "infinity"]
-    network_mode: service:mhk-gw
-    depends_on: [mhk-gw]
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
-    <<: *limits
+    <<: [*behind-gw, *limits]
 
   # Control: same network, no gateway. Shows the host's own exit IP.
   mhk-direct:

@@ -57,6 +57,9 @@ services:
     depends_on:
       mihomyak:
         condition: service_healthy
+        # A restarted gateway gets a new network namespace; apps still in the old
+        # one have no network at all. Compose restarts them after the gateway.
+        restart: true
     restart: unless-stopped
 
 volumes:
