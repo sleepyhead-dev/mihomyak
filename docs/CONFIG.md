@@ -11,7 +11,7 @@
    Docker конфиг необязателен);
 3. переменные окружения `MIHOMYAK_*`.
 
-Полный пример с комментариями: [examples/config.toml](../examples/config.toml).
+Полный пример с комментариями: [deploy/config.example.toml](../deploy/config.example.toml).
 Проверка настроек: `mihomyak check`. Итоговый конфиг mihomo: `mihomyak render`.
 
 Неизвестный ключ в TOML — это ошибка, а не молчаливое игнорирование. Настройки

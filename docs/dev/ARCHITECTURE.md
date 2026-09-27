@@ -27,29 +27,32 @@ Async-рантайма нет. Супервизор почти всё время
 | Модуль | Ответственность |
 |--------|-----------------|
 | `main.rs` | umask 077, логгер, разбор CLI, коды выхода |
-| `cli.rs` | clap-описание команд |
-| `commands/` | реализация команд (status, proxies, select, fetch, check…), разбита по модулям: `subscription.rs`, `proxy.rs`, `core_cmd.rs` |
-| `config.rs` | TOML + env, валидация, значения по умолчанию |
-| `identity.rs` | machine-id, os-release (два парсера: по спецификации и «как регулярка Koala»), hostname, локаль |
-| `emulation.rs` | **точные** заголовки FlClashX / Koala / Happ, формулы HWID и UA |
-| `http.rs` | свой HTTP/1.1-клиент: заголовки как есть, rustls без ALPN, chunked, gzip/deflate/br/zstd, CONNECT-прокси, unix-сокет; все размеры ограничены, общий дедлайн запроса; IDN → punycode; метка сокета (`SO_MARK`) для kill switch |
-| `gateway.rs` | проверки окружения шлюза: встроенный DNS Docker, который пересылает запросы из пространства хоста мимо TUN |
-| `killswitch.rs` | опциональный kill switch шлюза: цепочка iptables/ip6tables, выпускающая только TUN, помеченный трафик, DNS, ответы и частные сети |
+| **`cli/`** | командная строка |
+| `cli/mod.rs` | clap-описание команд и справка по группам (`GROUPS`) |
+| `cli/commands/` | реализация команд: `subscription.rs` (update, fetch, identity, status, check, render), `proxy.rs` (proxies, select, test, mode), `core_cmd.rs` (core, health) |
+| `cli/tui.rs` | ratatui-интерфейс (feature `tui`) |
+| **`config/`** | настройки: схема и значения по умолчанию (`mod.rs`), переменные `MIHOMYAK_*` (`env.rs`), проверки (`validate.rs`) |
+| **`client/`** | как mihomyak выглядит для панели |
+| `client/identity.rs` | machine-id (в том числе из seed), os-release (два парсера: по спецификации и «как регулярка Koala»), hostname, локаль |
+| `client/emulation.rs` | **точные** заголовки FlClashX / Koala / Happ, формулы HWID и UA |
+| `client/http` | свой HTTP/1.1-клиент: заголовки как есть, rustls без ALPN, chunked, gzip/deflate/br/zstd, CONNECT-прокси, unix-сокет; все размеры ограничены, общий дедлайн запроса; IDN → punycode; метка сокета (`SO_MARK`) для kill switch |
+| **`subscription/`** | ответ панели |
 | `subscription/mod.rs` | загрузка с редиректами, `analyze` → `Problem` (Refused/Http/Invalid/Stub) |
 | `subscription/headers.rs` | `subscription-userinfo`, `profile-*`, `announce`, `x-hwid-*`, `flclashx-newdomain` |
 | `subscription/body.rs` | формат тела: YAML / ссылки / base64 / Xray JSON / HTML; адреса узлов |
 | `subscription/stub.rs` | распознавание заглушек (0.0.0.0/loopback/port ≤ 1, HWID-отказы) |
 | `subscription/xray.rs` | Xray JSON → прокси mihomo (маппинг как в генераторе Remnawave) |
-| `pattern.rs` | glob-маски имён узлов; перевод в Go-regex для провайдеров |
-| `profile.rs` | сборка `config.yaml`: белый список ключей подписки, безопасные типы прокси и пути провайдеров, фильтр со всеми ссылками, группы, правила, управляемые ключи, TUN, `[mihomo]` |
-| `schedule.rs` | cron (5 полей) и локальное время через `localtime_r` |
-| `updater.rs` | конвейер обновления: проверка `mihomo -t`, резервные копии `*.prev` и откат, кэш, расписание |
-| `supervisor.rs` | цикл `run`: сигналы, запуск и перезапуск mihomo, hot reload, группы по умолчанию, reaping |
-| `core.rs` | процесс mihomo (очищенное окружение, `PR_SET_PDEATHSIG`, SIGTERM → SIGKILL), поиск бинарника, `core install`, geo-базы |
-| `api.rs` | REST API mihomo (proxies, select, delay, configs, connections); `Rejected` отличает отказ mihomo от недоступности |
-| `store.rs` | каталог данных: machine-id, secret, блокировка супервизора (flock), mode, кэш подписки, метаданные |
-| `tui.rs` | ratatui-интерфейс (feature `tui`) |
-| `util.rs`, `log.rs` | время без chrono, размеры, sha256 (ring), атомарная запись, логгер |
+| **`mihomo/`** | всё про ядро |
+| `mihomo/profile.rs` | сборка `config.yaml`: белый список ключей подписки, безопасные типы прокси и пути провайдеров, фильтр со всеми ссылками, группы, правила, управляемые ключи, TUN, `[mihomo]` |
+| `mihomo/core.rs` | процесс mihomo (очищенное окружение, `PR_SET_PDEATHSIG`, SIGTERM → SIGKILL), поиск бинарника, `core install`, geo-базы |
+| `mihomo/api.rs` | REST API mihomo (proxies, select, delay, configs, connections); `Rejected` отличает отказ mihomo от недоступности |
+| **`service/`** | фоновая работа |
+| `service/supervisor.rs` | цикл `run`: сигналы, запуск и перезапуск mihomo, hot reload, группы по умолчанию, reaping, быстрые повторы до первого конфига |
+| `service/updater.rs` | конвейер обновления: проверка `mihomo -t`, резервные копии `*.prev` и откат, кэш, расписание |
+| `service/schedule.rs` | cron (5 полей) и локальное время через `localtime_r` |
+| `service/store.rs` | каталог данных: machine-id, secret, блокировка супервизора (flock), mode, кэш подписки, метаданные |
+| **`gateway/`** | режим шлюза: проверка встроенного DNS Docker, который пересылает запросы мимо TUN (`mod.rs`), и kill switch — цепочка iptables/ip6tables, выпускающая только TUN, помеченный трафик, DNS, ответы и частные сети (`killswitch.rs`) |
+| **`util/`** | время без chrono, размеры, sha256 (ring), атомарная запись (`mod.rs`), логгер (`log.rs`), glob-маски имён узлов и их перевод в Go-regex (`pattern.rs`) |
 
 ## Ключевые решения
 
@@ -81,7 +84,7 @@ Async-рантайма нет. Супервизор почти всё время
    pid никогда не получит сигнал.
 7. **Безопасность по умолчанию.** loopback-прокси, `lan-allowed-ips`, секрет API,
    umask 077, файлы 0600, hardening в compose. Подробности — в README и
-   [DOCKER.md](DOCKER.md).
+   [DOCKER.md](../DOCKER.md).
 8. **Минимум зависимостей.** Никаких chrono, regex, tokio, reqwest. Криптография —
    ring (уже нужен rustls); zstd и brotli — на чистом Rust.
 
@@ -102,16 +105,17 @@ mihomo/                 home mihomo: config.yaml (+ .prev), providers/, cache.db
 
 | Уровень | Где | Что проверяет |
 |---------|-----|---------------|
-| unit | `src/**` (`#[cfg(test)]`) | парсеры, формулы, сборка конфига, cron, фильтры |
+| unit | `src/**` (`#[cfg(test)]`) | парсеры, формулы HWID и заголовков, сборка конфига, cron, фильтры, права файлов, настройки |
 | golden | `tests/golden_requests.rs` + `tests/fixtures/requests/` | байты запроса совпадают с перехваченными у настоящих клиентов |
+| интеграционные | `tests/updater_pipeline.rs`, `tests/api_client.rs` | конвейер обновления и клиент API mihomo против встроенных фейковых серверов |
 | mihomo | `tests/mihomo_validate.rs` | сгенерированные конфиги проходят `mihomo -t` (нужен `MIHOMYAK_TEST_MIHOMO`) |
-| e2e вручную | `tests/e2e/mock_panel.py` | мок Remnawave: правила по UA, HWID-лимит, заглушки, Xray JSON |
+| Docker smoke | `tests/e2e/smoke.sh` | образ стартует в hardened-режиме, шлюз без `dns:` не стартует |
+| шлюз e2e | `tests/e2e/gateway.sh` + `gateway.compose.yml` | стенд с мок-панелью, двумя узлами и «сайтом» за ними, на amd64 и arm64 |
 
-Сквозной сценарий, проверенный при разработке: мок-панель, второй mihomo как
-shadowsocks-сервер, mihomyak (на хосте и в Docker-шлюзе с TUN), трафик клиента
-через прокси, отказ при остановке сервера, HWID-лимит, заглушки, fallback-группа,
-cron, `on_start`, падение ядра и перезапуск. После ревью дополнительно: панель
-с враждебными ответами (переполнение chunked, бесконечная строка, медленная
-отдача, огромный интервал, конфиг, который mihomo отвергает), `SIGKILL`
-супервизора (mihomo завершается следом), обновление в Docker-шлюзе при работающем
-TUN, остановка контейнера за доли секунды.
+Стенд `gateway.sh` проверяет: трафик клиента идёт через узел (цель видит адрес узла),
+DNS отдаёт fake-ip, явный прокси для соседнего контейнера, `update` через SIGHUP,
+ошибки и заглушки панели не заменяют рабочий конфиг, лимит устройств, форматы Happ,
+враждебную панель, переключение fallback-группы и возврат, kill switch при убитом
+mihomo и замороженном супервизоре, старт из кэша после перезапуска с переподключением
+клиента, чистое снятие правил по SIGTERM, RSS супервизора. Тот же сценарий
+проверялся вручную на Raspberry Pi 3B+.

@@ -131,10 +131,10 @@ ok "every mode fails in time, the gateway keeps running"
 
 step "fallback"
 wait_for 30 "E2E-1 preferred" target_is 203.0.113.21
-compose stop -t 1 mhk-node1 >/dev/null 2>&1
+out=$(compose stop -t 1 mhk-node1 2>&1) || fail "stop node 1: $out"
 wait_for 60 "switch to E2E-2" target_is 203.0.113.22
 ok "node 1 down: traffic moves to node 2"
-compose start mhk-node1 >/dev/null 2>&1
+out=$(compose start mhk-node1 2>&1) || fail "start node 1: $out"
 wait_for 60 "return to E2E-1" target_is 203.0.113.21
 ok "node 1 back: traffic returns"
 
@@ -152,7 +152,7 @@ wait_for 30 "mihomo restarted" gw mihomyak health
 expect_node "" "after the restart traffic goes through a node again"
 
 step "restart"
-compose restart mhk-gw >/dev/null 2>&1
+out=$(compose restart mhk-gw 2>&1) || fail "compose restart: $out"
 wait_for 60 "gateway healthy" gw mihomyak health
 wait_for 60 "client reconnected" target_is 203.0.113.21
 logs=$(docker logs mhk-gw 2>&1)

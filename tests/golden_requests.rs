@@ -1,5 +1,5 @@
 //! Byte-exact comparison of mihomyak's subscription requests with requests
-//! captured from the real clients (tests/fixtures/requests/README.md).
+//! captured from the real clients (docs/dev/DEVELOPMENT.md).
 
 use std::io::{Read, Write};
 use std::net::TcpListener;

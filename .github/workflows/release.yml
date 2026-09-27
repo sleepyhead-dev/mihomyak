@@ -86,7 +86,8 @@ jobs:
           install -m 755 bin/mihomyak "$name/mihomyak"
           cp README.md LICENSE CHANGELOG.md "$name/"
           cp -r deploy "$name/"
-          tar czf "$name.tar.gz" "$name"
+          # Stable file name: releases/latest/download/mihomyak-<target>.tar.gz
+          tar czf "mihomyak-${{ matrix.target }}.tar.gz" "$name"
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.target }}
