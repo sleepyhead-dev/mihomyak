@@ -16,9 +16,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
-use crate::api::{Api, DELAY_TIMEOUT_MS, Snapshot};
+use crate::mihomo::api::{Api, DELAY_TIMEOUT_MS, Snapshot};
 use crate::config::Config;
-use crate::store::Store;
+use crate::service::store::Store;
 use crate::subscription::ProviderInfo;
 use crate::util::{fmt_bytes, fmt_date, now_unix, sanitize};
 
@@ -148,7 +148,7 @@ impl App {
         }
     }
 
-    fn group(&self) -> Option<&crate::api::Group> {
+    fn group(&self) -> Option<&crate::mihomo::api::Group> {
         self.groups
             .selected()
             .and_then(|i| self.snapshot.groups.get(i))
@@ -234,7 +234,7 @@ impl App {
             return;
         };
         self.status = format!("testing {}…", sanitize(&group));
-        let url = crate::profile::HEALTH_CHECK_URL;
+        let url = crate::mihomo::profile::HEALTH_CHECK_URL;
         self.spawn(
             move |api| match api.group_delay(&group, url, DELAY_TIMEOUT_MS) {
                 // Members missing from the answer failed: show them as timeouts (0).

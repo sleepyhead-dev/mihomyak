@@ -1,7 +1,7 @@
 # Golden subscription requests
 
 Raw HTTP request heads captured from the real clients on Ubuntu 24.04 with
-`/etc/machine-id = 0d0af05ee8fd4dc29275718f2ce4dff1` (see `docs/SUBSCRIPTIONS.md` §7).
+`/etc/machine-id = 0d0af05ee8fd4dc29275718f2ce4dff1` (see `docs/dev/SUBSCRIPTIONS.md` §7).
 `{PORT}` stands for the test server port. CRLF line endings are significant.
 
 | File | Captured from |
@@ -12,4 +12,4 @@ Raw HTTP request heads captured from the real clients on Ubuntu 24.04 with
 
 `tests/golden_requests.rs` asserts that mihomyak sends these bytes exactly.
 Re-capture and update both the fixture and the version constants in
-`src/emulation.rs` when a client release changes its request.
+`src/client/emulation.rs` when a client release changes its request.

@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use crate::config::Config;
-use crate::http::{Client, Endpoint, Request, Scheme, Url};
-use crate::store::Store;
+use crate::client::http::{Client, Endpoint, Request, Scheme, Url};
+use crate::service::store::Store;
 
 pub struct CoreProcess {
     child: Child,
@@ -228,7 +228,7 @@ pub fn install(
         }
         crate::info!("sha256 verified");
     }
-    let binary = crate::http::inflate(
+    let binary = crate::client::http::inflate(
         flate2::read::GzDecoder::new(&response.body[..]),
         MAX_BINARY_BYTES,
     )
@@ -253,7 +253,7 @@ fn latest_tag(client: &Client, base: &str) -> Result<String> {
     Ok(tag.to_owned())
 }
 
-fn get(client: &Client, url: &Url, max_redirects: usize) -> Result<crate::http::Response> {
+fn get(client: &Client, url: &Url, max_redirects: usize) -> Result<crate::client::http::Response> {
     let mut url = url.clone();
     for _ in 0..=max_redirects {
         let headers = vec![

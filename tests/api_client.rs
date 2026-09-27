@@ -1,4 +1,4 @@
-//! Integration tests for the mihomo REST API client (`src/api.rs`) against an
+//! Integration tests for the mihomo REST API client (`src/mihomo/api.rs`) against an
 //! in-process fake HTTP server, following the pattern in
 //! `tests/golden_requests.rs`.
 
@@ -7,7 +7,7 @@ use std::net::TcpListener;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use mihomyak::api::{Api, Rejected};
+use mihomyak::mihomo::api::{Api, Rejected};
 
 /// Serves `responses` in order, one per accepted connection, then exits.
 /// Read/write timeouts on every socket keep a broken test from hanging CI.

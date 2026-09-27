@@ -2,14 +2,14 @@
 //!
 //! Every emulated client derives its headers from the same raw facts a desktop
 //! Linux install exposes (`/etc/machine-id`, `/etc/os-release`, kernel release).
-//! Client-specific formulas live in `emulation.rs`.
+//! Client-specific formulas live in `client/emulation.rs`.
 
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
 use crate::config::Config;
-use crate::store::Store;
+use crate::service::store::Store;
 
 #[derive(Debug, Clone)]
 pub struct Identity {
@@ -63,7 +63,7 @@ impl Identity {
 }
 
 /// os-release facts, kept raw because every emulated client parses them its own
-/// way (see `docs/SUBSCRIPTIONS.md` §7): device_info_plus (FlClashX), Koala's
+/// way (see `docs/dev/SUBSCRIPTIONS.md` §7): device_info_plus (FlClashX), Koala's
 /// regexes, Qt's QSysInfo (Happ).
 #[derive(Debug, Clone, Default)]
 pub struct OsRelease {

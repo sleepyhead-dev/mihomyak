@@ -14,11 +14,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 
 use crate::config::{Config, Interval};
-use crate::emulation::{ClientKind, Emulation};
-use crate::http::{self, Response, Scheme, Url};
-use crate::identity::Identity;
-use crate::profile::{Built, Params};
-use crate::store::{Store, SubscriptionMeta};
+use crate::client::emulation::{ClientKind, Emulation};
+use crate::client::http::{self, Response, Scheme, Url};
+use crate::client::identity::Identity;
+use crate::mihomo::profile::{Built, Params};
+use crate::service::store::{Store, SubscriptionMeta};
 use crate::subscription::{self, Analysis, Problem, ProviderInfo};
 use crate::util::{now_unix, sha256_hex, write_atomic};
 
@@ -37,7 +37,7 @@ pub struct Updater {
     pub emulation: Emulation,
     pub secret: String,
     client: http::Client,
-    crons: Vec<crate::schedule::Cron>,
+    crons: Vec<crate::service::schedule::Cron>,
 }
 
 pub struct Restored {
@@ -89,7 +89,7 @@ impl Updater {
                 mark: config
                     .gateway
                     .kill_switch
-                    .then_some(crate::killswitch::MARK),
+                    .then_some(crate::gateway::killswitch::MARK),
                 ..http::Client::default()
             },
             crons: config
@@ -149,7 +149,7 @@ impl Updater {
         let by_cron = self
             .crons
             .iter()
-            .filter_map(|c| c.next_after(fetched_at, crate::schedule::local_time))
+            .filter_map(|c| c.next_after(fetched_at, crate::service::schedule::local_time))
             .min();
         by_interval.into_iter().chain(by_cron).min()
     }
@@ -323,7 +323,7 @@ impl Updater {
             panel_hosts,
             panel_ips,
         };
-        crate::profile::build(content, &self.config, &params)
+        crate::mihomo::profile::build(content, &self.config, &params)
     }
 
     /// Records when the supervisor will update next (shown by `mihomyak status`).
@@ -348,7 +348,7 @@ impl Updater {
     }
 
     fn provider_path(&self) -> PathBuf {
-        self.store.mihomo_home().join(crate::profile::PROVIDER_FILE)
+        self.store.mihomo_home().join(crate::mihomo::profile::PROVIDER_FILE)
     }
 
     /// Files replaced by an update, with their `*.prev` backups.
@@ -390,8 +390,8 @@ impl Updater {
     /// Runs `mihomo -t` on a built config: `Ok(None)` if accepted, `Ok(Some(log))`
     /// if rejected, `Err` if the check itself could not run.
     pub fn check_config(&self, built: &Built) -> Result<Option<String>> {
-        let bin = crate::core::resolve_bin(&self.config, &self.store);
-        if !bin.is_file() && crate::core::which(&bin).is_none() {
+        let bin = crate::mihomo::core::resolve_bin(&self.config, &self.store);
+        if !bin.is_file() && crate::mihomo::core::which(&bin).is_none() {
             anyhow::bail!("mihomo binary not found");
         }
         let home = self.store.mihomo_home();
@@ -438,7 +438,7 @@ fn prev(path: &Path) -> PathBuf {
 fn run_check(bin: &Path, home: &Path, config: &Path) -> Result<Option<String>> {
     let log_path = home.join(".candidate.log");
     let log = std::fs::File::create(&log_path).context("create the check log")?;
-    let mut child = crate::core::command(bin)
+    let mut child = crate::mihomo::core::command(bin)
         .arg("-t")
         .arg("-d")
         .arg(home)

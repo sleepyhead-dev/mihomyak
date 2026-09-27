@@ -50,28 +50,28 @@ pub fn write(level: Level, args: std::fmt::Arguments<'_>) {
 #[macro_export]
 macro_rules! log_at {
     ($level:expr, $($arg:tt)*) => {
-        if $crate::log::enabled($level) {
-            $crate::log::write($level, format_args!($($arg)*));
+        if $crate::util::log::enabled($level) {
+            $crate::util::log::write($level, format_args!($($arg)*));
         }
     };
 }
 
 #[macro_export]
 macro_rules! error {
-    ($($arg:tt)*) => { $crate::log_at!($crate::log::Level::Error, $($arg)*) };
+    ($($arg:tt)*) => { $crate::log_at!($crate::util::log::Level::Error, $($arg)*) };
 }
 
 #[macro_export]
 macro_rules! warn {
-    ($($arg:tt)*) => { $crate::log_at!($crate::log::Level::Warn, $($arg)*) };
+    ($($arg:tt)*) => { $crate::log_at!($crate::util::log::Level::Warn, $($arg)*) };
 }
 
 #[macro_export]
 macro_rules! info {
-    ($($arg:tt)*) => { $crate::log_at!($crate::log::Level::Info, $($arg)*) };
+    ($($arg:tt)*) => { $crate::log_at!($crate::util::log::Level::Info, $($arg)*) };
 }
 
 #[macro_export]
 macro_rules! debug {
-    ($($arg:tt)*) => { $crate::log_at!($crate::log::Level::Debug, $($arg)*) };
+    ($($arg:tt)*) => { $crate::log_at!($crate::util::log::Level::Debug, $($arg)*) };
 }

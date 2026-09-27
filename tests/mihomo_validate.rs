@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use mihomyak::config::Config;
-use mihomyak::profile::Params;
+use mihomyak::mihomo::profile::Params;
 use mihomyak::subscription::body;
 
 fn mihomo() -> Option<PathBuf> {
@@ -45,13 +45,13 @@ fn validate_with(name: &str, body: &[u8], config: &Config) {
             "2001:db8::7".parse().unwrap(),
         ],
     };
-    let built = mihomyak::profile::build(&content, config, &params)
+    let built = mihomyak::mihomo::profile::build(&content, config, &params)
         .unwrap_or_else(|e| panic!("{name}: {e:#}"));
     let Some(bin) = mihomo() else { return };
     let home = tempfile::tempdir().unwrap();
     std::fs::write(home.path().join("config.yaml"), &built.config_yaml).unwrap();
     if let Some(provider) = &built.provider {
-        let path = home.path().join(mihomyak::profile::PROVIDER_FILE);
+        let path = home.path().join(mihomyak::mihomo::profile::PROVIDER_FILE);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, provider).unwrap();
     }

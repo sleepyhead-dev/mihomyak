@@ -12,8 +12,8 @@ use anyhow::{Context, Result, bail};
 pub use body::{Content, Format};
 pub use headers::ProviderInfo;
 
-use crate::emulation::Emulation;
-use crate::http::{Client, Endpoint, Request, Response, Scheme, Url};
+use crate::client::emulation::Emulation;
+use crate::client::http::{Client, Endpoint, Request, Response, Scheme, Url};
 
 /// Every emulated client follows redirects; FlClashX allows at most 5.
 pub const MAX_REDIRECTS: usize = 5;

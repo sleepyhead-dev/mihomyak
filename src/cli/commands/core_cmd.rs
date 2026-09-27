@@ -8,7 +8,7 @@ use crate::cli::CoreCommand;
 use crate::config::Config;
 
 pub(super) fn core_cmd(config: &Config, cmd: CoreCommand) -> Result<ExitCode> {
-    let store = crate::store::Store::open(&config.data_dir)?;
+    let store = crate::service::store::Store::open(&config.data_dir)?;
     match cmd {
         CoreCommand::Install {
             version,
@@ -17,7 +17,7 @@ pub(super) fn core_cmd(config: &Config, cmd: CoreCommand) -> Result<ExitCode> {
             sha256,
         } => {
             let dest = dest.unwrap_or_else(|| store.root().join("bin/mihomo"));
-            let tag = crate::core::install(
+            let tag = crate::mihomo::core::install(
                 version.as_deref(),
                 &dest,
                 mirror.as_deref(),
@@ -26,8 +26,8 @@ pub(super) fn core_cmd(config: &Config, cmd: CoreCommand) -> Result<ExitCode> {
             println!("installed mihomo {tag} to {}", dest.display());
         }
         CoreCommand::Version => {
-            let bin = crate::core::resolve_bin(config, &store);
-            println!("{} ({})", crate::core::version(&bin)?, bin.display());
+            let bin = crate::mihomo::core::resolve_bin(config, &store);
+            println!("{} ({})", crate::mihomo::core::version(&bin)?, bin.display());
         }
     }
     Ok(ExitCode::SUCCESS)

@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::identity::{generate_machine_id, is_valid_machine_id};
+use crate::client::identity::{generate_machine_id, is_valid_machine_id};
 use crate::util::{write_atomic, write_new};
 
 #[derive(Debug, Clone)]

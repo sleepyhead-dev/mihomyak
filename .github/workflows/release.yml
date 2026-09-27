@@ -85,7 +85,7 @@ jobs:
           mkdir "$name"
           install -m 755 bin/mihomyak "$name/mihomyak"
           cp README.md LICENSE CHANGELOG.md "$name/"
-          cp -r examples contrib deploy "$name/"
+          cp -r deploy "$name/"
           tar czf "$name.tar.gz" "$name"
       - uses: actions/upload-artifact@v4
         with:

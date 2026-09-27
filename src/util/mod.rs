@@ -3,6 +3,9 @@
 //! Kept dependency-free on purpose: pulling `chrono` or `humantime` for a handful of
 //! conversions would dominate the binary size of this crate.
 
+pub mod log;
+pub mod pattern;
+
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -251,7 +254,7 @@ mod tests {
 
     #[test]
     fn hashes_like_coreutils() {
-        // Value verified against FlClashX/Koala on a real machine (docs/SUBSCRIPTIONS.md).
+        // Value verified against FlClashX/Koala on a real machine (docs/dev/SUBSCRIPTIONS.md).
         assert!(sha256_hex(b"0d0af05ee8fd4dc29275718f2ce4dff1").starts_with("a3b522eaa6f7dd89"));
         assert_eq!(sha256_hex(b"").len(), 64);
         assert_eq!(random_hex(16).unwrap().len(), 32);

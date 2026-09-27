@@ -4,20 +4,20 @@
 # it (`network_mode: service:mihomyak`) is proxied transparently, DNS included.
 # No proxy settings inside the apps, no ports exposed to the LAN.
 #
-#   cp deploy/.env.example deploy/.env && chmod 600 deploy/.env && $EDITOR deploy/.env
-#   docker compose -f deploy/compose.gateway.yml up -d
-#   docker compose -f deploy/compose.gateway.yml exec mihomyak mihomyak tui
+#   cp deploy/docker/.env.example deploy/docker/.env && chmod 600 deploy/docker/.env && $EDITOR deploy/docker/.env
+#   docker compose -f deploy/docker/compose.gateway.yml up -d
+#   docker compose -f deploy/docker/compose.gateway.yml exec mihomyak mihomyak tui
 
 services:
   mihomyak:
     image: ghcr.io/sleepyhead-dev/mihomyak:latest
     # Built from this repository when the image cannot be pulled.
-    build: ..
+    build: ../..
     container_name: mihomyak
     # Reported to the provider by the Happ emulation (X-Device-Model: <hostname>_<arch>).
     hostname: ${MIHOMYAK_HOSTNAME:-home-server}
     restart: unless-stopped
-    # Relative to this file: deploy/.env.
+    # Relative to this file: deploy/docker/.env.
     env_file: .env
     environment:
       MIHOMYAK_GATEWAY: "1"
@@ -26,7 +26,7 @@ services:
       MIHOMYAK_KILL_SWITCH: ${MIHOMYAK_KILL_SWITCH:-1}
     volumes:
       - mihomyak-data:/data
-      # Optional fine-tuning (groups, filters, cron…): see examples/config.toml.
+      # Optional fine-tuning (groups, filters, cron…): see deploy/config.example.toml.
       # - ./config.toml:/data/config.toml:ro
       # Report the host's distro instead of the image's Alpine in device headers.
       # - /etc/os-release:/etc/os-release:ro

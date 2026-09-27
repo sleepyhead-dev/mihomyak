@@ -4,13 +4,17 @@
 //! template assembled from the subcommands' own descriptions (`GROUPS`); a
 //! test makes sure every command is listed.
 
+pub mod commands;
+#[cfg(feature = "tui")]
+pub mod tui;
+
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use clap::builder::styling::{AnsiColor, Effects, Style, Styles};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
-use crate::emulation::ClientKind;
+use crate::client::emulation::ClientKind;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -115,10 +119,10 @@ pub enum Command {
         /// Group name: exact, case-insensitive or a unique part of it.
         group: Option<String>,
         /// URL requested through each proxy.
-        #[arg(long, default_value = crate::profile::HEALTH_CHECK_URL)]
+        #[arg(long, default_value = crate::mihomo::profile::HEALTH_CHECK_URL)]
         url: String,
         /// Per-proxy timeout.
-        #[arg(long, default_value_t = crate::api::DELAY_TIMEOUT_MS, value_name = "MS")]
+        #[arg(long, default_value_t = crate::mihomo::api::DELAY_TIMEOUT_MS, value_name = "MS")]
         timeout: u32,
     },
     /// Show or switch the routing mode (rule, global, direct).
@@ -189,10 +193,10 @@ pub fn command() -> clap::Command {
     let long_version = format!(
         "{}\nemulates  FlClashX {} (core {}), Koala Clash {}, Happ {}\ntarget    {}-linux",
         env!("CARGO_PKG_VERSION"),
-        crate::emulation::FLCLASHX_VERSION,
-        crate::emulation::FLCLASHX_CORE_VERSION,
-        crate::emulation::KOALA_VERSION,
-        crate::emulation::HAPP_VERSION,
+        crate::client::emulation::FLCLASHX_VERSION,
+        crate::client::emulation::FLCLASHX_CORE_VERSION,
+        crate::client::emulation::KOALA_VERSION,
+        crate::client::emulation::HAPP_VERSION,
         std::env::consts::ARCH,
     );
     // Built once per process; clap wants a `'static` string here.
@@ -299,6 +303,6 @@ mod tests {
     #[test]
     fn long_version_names_the_emulated_clients() {
         let version = command().render_long_version();
-        assert!(version.contains(crate::emulation::HAPP_VERSION));
+        assert!(version.contains(crate::client::emulation::HAPP_VERSION));
     }
 }

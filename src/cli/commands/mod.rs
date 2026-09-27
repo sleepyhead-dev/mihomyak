@@ -8,7 +8,7 @@ use std::process::ExitCode;
 
 use anyhow::{Result, bail};
 
-use crate::api::Api;
+use crate::mihomo::api::Api;
 use crate::cli::{Cli, Command};
 use crate::config::Config;
 use crate::subscription::ProviderInfo;
@@ -17,7 +17,7 @@ use crate::util::{fmt_bytes, fmt_date, fmt_duration, now_unix, sanitize};
 pub fn run(cli: Cli) -> Result<ExitCode> {
     let mut config = Config::load(cli.config.as_deref(), cli.data_dir.as_deref())?;
     match cli.command {
-        Command::Run => crate::supervisor::run(config).map(|()| ExitCode::SUCCESS),
+        Command::Run => crate::service::supervisor::run(config).map(|()| ExitCode::SUCCESS),
         Command::Update => subscription::update(config),
         Command::Fetch {
             client,
@@ -48,7 +48,7 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
         } => proxy::test(&config, group.as_deref(), &url, timeout),
         Command::Mode { mode } => proxy::mode_cmd(&config, mode.as_deref()),
         #[cfg(feature = "tui")]
-        Command::Tui => crate::tui::run(&config).map(|()| ExitCode::SUCCESS),
+        Command::Tui => crate::cli::tui::run(&config).map(|()| ExitCode::SUCCESS),
         Command::Render => subscription::render(config),
         Command::Check => subscription::check(config),
         Command::Health => Ok(core_cmd::health(&config)),

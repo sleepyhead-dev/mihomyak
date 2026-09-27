@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local stand-in for a Remnawave subscription endpoint (stdlib only).
 
-Reproduces the behaviour documented in docs/SUBSCRIPTIONS.md §2 so mihomyak can be
+Reproduces the behaviour documented in docs/dev/SUBSCRIPTIONS.md §2 so mihomyak can be
 exercised without a real subscription:
 
 * default Response Rules: browser → HTML, mihomo-family UA → YAML, else base64 links

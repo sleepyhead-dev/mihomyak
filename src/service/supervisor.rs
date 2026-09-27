@@ -18,10 +18,10 @@ use anyhow::{Context, Result, bail};
 use signal_hook::consts::{SIGCHLD, SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
-use crate::api::{Api, Rejected};
+use crate::mihomo::api::{Api, Rejected};
 use crate::config::Config;
-use crate::core::{self, CoreProcess};
-use crate::updater::{self, Outcome, Updater};
+use crate::mihomo::core::{self, CoreProcess};
+use crate::service::updater::{self, Outcome, Updater};
 use crate::util::now_unix;
 
 /// Below Docker's default 10 s stop timeout, so mihomo gets to clean up TUN routes
@@ -60,7 +60,7 @@ pub fn run(config: Config) -> Result<()> {
     // removed) only when `run` returns.
     let _kill_switch = gateway
         .kill_switch
-        .then(crate::killswitch::enable)
+        .then(crate::gateway::killswitch::enable)
         .transpose()?;
     Supervisor::new(updater)?.run()
 }
@@ -134,7 +134,7 @@ impl Supervisor {
         if !self.updater.config.update.cron.is_empty() {
             crate::info!(
                 "cron schedules use local time UTC{} (set TZ to change it)",
-                crate::schedule::utc_offset(now_unix())
+                crate::service::schedule::utc_offset(now_unix())
             );
         }
         if !self.prepare()? {
@@ -310,7 +310,7 @@ impl Supervisor {
 
     /// Waits until the core's API lists groups. Signals arriving meanwhile are
     /// kept for the main loop; a stop request or a dead core ends the wait early.
-    fn wait_for_api(&mut self) -> Option<crate::api::Snapshot> {
+    fn wait_for_api(&mut self) -> Option<crate::mihomo::api::Snapshot> {
         let deadline = Instant::now() + API_READY_TIMEOUT;
         loop {
             match self.api.snapshot() {

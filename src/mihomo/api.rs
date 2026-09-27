@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use crate::config::Config;
-use crate::http::{Client, Endpoint, Request, Response};
+use crate::client::http::{Client, Endpoint, Request, Response};
 use crate::util::encode_path_segment;
 
 /// Timeout for a single delay test, shared by the CLI and the TUI.
@@ -71,7 +71,7 @@ impl Api {
     pub fn from_config(config: &Config) -> Result<Self> {
         let secret = match &config.core.secret {
             Some(secret) => secret.clone(),
-            None => crate::store::Store::open(&config.data_dir)?.secret()?,
+            None => crate::service::store::Store::open(&config.data_dir)?.secret()?,
         };
         Self::new(&config.core.controller, &secret)
     }

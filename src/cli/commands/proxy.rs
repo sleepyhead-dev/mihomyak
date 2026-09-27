@@ -73,7 +73,7 @@ pub(super) fn test(
 ) -> Result<ExitCode> {
     let api = super::api(config)?;
     let snapshot = api.snapshot()?;
-    let groups: Vec<&crate::api::Group> = match group {
+    let groups: Vec<&crate::mihomo::api::Group> = match group {
         Some(q) => {
             let name = super::resolve_name(snapshot.groups.iter().map(|g| &g.name), q)?;
             snapshot.groups.iter().filter(|g| g.name == name).collect()
@@ -108,7 +108,7 @@ pub(super) fn mode_cmd(config: &Config, mode: Option<&str>) -> Result<ExitCode> 
     match mode {
         Some(mode) => {
             api.set_mode(mode)?;
-            crate::store::Store::open(&config.data_dir)?.set_mode(mode)?;
+            crate::service::store::Store::open(&config.data_dir)?.set_mode(mode)?;
             println!("mode: {mode}");
         }
         None => println!("mode: {}", api.mode()?),

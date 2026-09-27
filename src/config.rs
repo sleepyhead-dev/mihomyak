@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use crate::emulation::ClientKind;
+use crate::client::emulation::ClientKind;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -161,7 +161,7 @@ fn default_group_type() -> GroupType {
 }
 
 fn default_health_url() -> String {
-    crate::profile::HEALTH_CHECK_URL.into()
+    crate::mihomo::profile::HEALTH_CHECK_URL.into()
 }
 
 fn default_health_interval() -> HumanDuration {
@@ -251,7 +251,7 @@ impl std::str::FromStr for Interval {
             return Ok(Self::Off);
         }
         let d = crate::util::parse_duration(s)?;
-        if d < crate::updater::MIN_INTERVAL {
+        if d < crate::service::updater::MIN_INTERVAL {
             bail!("update interval {s:?} is shorter than the 5 minute minimum");
         }
         Ok(Self::Fixed(d))
@@ -566,11 +566,11 @@ impl Config {
             bail!("device.seed is empty");
         }
         if let Some(url) = &self.subscription.url {
-            crate::http::Url::parse(url).context("subscription.url")?;
+            crate::client::http::Url::parse(url).context("subscription.url")?;
         }
         if let Some(proxy) = &self.subscription.proxy {
-            let url = crate::http::Url::parse(proxy).context("subscription.proxy")?;
-            if url.scheme != crate::http::Scheme::Http {
+            let url = crate::client::http::Url::parse(proxy).context("subscription.proxy")?;
+            if url.scheme != crate::client::http::Scheme::Http {
                 bail!("subscription.proxy must be an http:// proxy");
             }
         }
@@ -622,7 +622,7 @@ impl Config {
             }
         }
         for cron in &self.update.cron {
-            cron.parse::<crate::schedule::Cron>()?;
+            cron.parse::<crate::service::schedule::Cron>()?;
         }
         let mut names = std::collections::HashSet::new();
         for group in &self.groups {
@@ -739,7 +739,7 @@ mod tests {
 
     #[test]
     fn shipped_example_is_valid() {
-        let config: Config = toml::from_str(include_str!("../examples/config.toml")).unwrap();
+        let config: Config = toml::from_str(include_str!("../deploy/config.example.toml")).unwrap();
         config.validate().unwrap();
         assert_eq!(config.groups[0].name, "Auto");
     }

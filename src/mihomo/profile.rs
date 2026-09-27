@@ -18,8 +18,8 @@ use anyhow::{Context, Result, bail};
 use serde_norway::{Mapping, Value};
 
 use crate::config::{Config, GroupType, Preset};
-use crate::emulation::ClientKind;
-use crate::pattern::{PatternSet, keep};
+use crate::client::emulation::ClientKind;
+use crate::util::pattern::{PatternSet, keep};
 use crate::subscription::{Content, Format};
 
 /// Provider file for link subscriptions, relative to the mihomo home directory.
@@ -206,8 +206,8 @@ pub fn build(content: &Content, config: &Config, params: &Params<'_>) -> Result<
     if config.gateway.enable && config.gateway.kill_switch {
         // The kill switch lets out only this TUN device and marked traffic, so
         // `[mihomo]` must not rename one or unmark the other.
-        set(map, "routing-mark", crate::killswitch::MARK);
-        set(child(map, "tun"), "device", crate::killswitch::TUN_DEVICE);
+        set(map, "routing-mark", crate::gateway::killswitch::MARK);
+        set(child(map, "tun"), "device", crate::gateway::killswitch::TUN_DEVICE);
     }
     Ok(Built {
         config_yaml: serde_norway::to_string(&root)?,
@@ -808,7 +808,7 @@ fn apply_managed(map: &mut Mapping, config: &Config) {
             .subscription
             .core_version
             .as_deref()
-            .unwrap_or(crate::emulation::FLCLASHX_CORE_VERSION);
+            .unwrap_or(crate::client::emulation::FLCLASHX_CORE_VERSION);
         set(map, "global-ua", format!("clash.meta/{core_version}"));
     }
 }
@@ -817,7 +817,7 @@ fn apply_gateway(map: &mut Mapping, config: &Config, params: &Params<'_>) {
     let gw = &config.gateway;
     let tun = child(map, "tun");
     set(tun, "enable", true);
-    set(tun, "device", crate::killswitch::TUN_DEVICE);
+    set(tun, "device", crate::gateway::killswitch::TUN_DEVICE);
     set(tun, "stack", gw.stack.as_str());
     set(tun, "auto-route", true);
     set(tun, "auto-redirect", gw.auto_redirect);
@@ -1111,11 +1111,11 @@ rules:
         let v = built(&parsed(REMNAWAVE), &config);
         assert_eq!(
             v["tun"]["device"].as_str(),
-            Some(crate::killswitch::TUN_DEVICE)
+            Some(crate::gateway::killswitch::TUN_DEVICE)
         );
         assert_eq!(
             v["routing-mark"].as_u64(),
-            Some(u64::from(crate::killswitch::MARK))
+            Some(u64::from(crate::gateway::killswitch::MARK))
         );
     }
 

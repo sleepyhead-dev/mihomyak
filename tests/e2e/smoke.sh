@@ -78,7 +78,7 @@ docker exec mihomyak-e2e-gateway mihomyak check >/dev/null || fail "mihomyak che
 
 # On a user-defined network Docker's embedded DNS forwards host-inherited
 # upstreams from the host's namespace, past the TUN; an explicit --dns is
-# queried from the gateway's namespace and answered by mihomo (src/gateway.rs).
+# queried from the gateway's namespace and answered by mihomo (src/gateway/mod.rs).
 echo "== app DNS behind the gateway"
 docker network create mihomyak-e2e >/dev/null
 start mihomyak-e2e-dns --network mihomyak-e2e --dns 1.1.1.1 \

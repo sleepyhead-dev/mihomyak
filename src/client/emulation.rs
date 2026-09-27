@@ -1,15 +1,15 @@
 //! Byte-exact emulation of real subscription clients.
 //!
 //! Every constant and formula here was verified against the real application
-//! (source code plus a captured request, see `docs/SUBSCRIPTIONS.md` §7).
+//! (source code plus a captured request, see `docs/dev/SUBSCRIPTIONS.md` §7).
 //! Golden copies of the captured requests live in `tests/fixtures/requests/`.
 
 use anyhow::{Result, bail};
 use serde::Deserialize;
 
 use crate::config::Config;
-use crate::http::Url;
-use crate::identity::Identity;
+use crate::client::http::Url;
+use crate::client::identity::Identity;
 use crate::util::sha256_hex;
 
 /// FlClashX release tag the defaults emulate (`FlClash X/v<this>`).
@@ -494,7 +494,7 @@ impl Emulation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::OsRelease;
+    use crate::client::identity::OsRelease;
 
     const UBUNTU: &str =
         "PRETTY_NAME=\"Ubuntu 24.04.3 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nID=ubuntu\n";

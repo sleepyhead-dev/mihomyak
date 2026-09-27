@@ -12,6 +12,8 @@
 //! Docker records which case applies in a comment of the generated file:
 //! `# ExtServers: [host(192.168.0.1)]` versus `# ExtServers: [1.1.1.1]`.
 
+pub mod killswitch;
+
 use std::io::Read;
 
 const RESOLV_CONF: &str = "/etc/resolv.conf";

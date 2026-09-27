@@ -6,9 +6,9 @@ use std::net::TcpListener;
 use std::thread;
 
 use mihomyak::config::Config;
-use mihomyak::emulation::{ClientKind, Emulation};
-use mihomyak::http::{Client, Url};
-use mihomyak::identity::{Identity, OsRelease};
+use mihomyak::client::emulation::{ClientKind, Emulation};
+use mihomyak::client::http::{Client, Url};
+use mihomyak::client::identity::{Identity, OsRelease};
 
 const UBUNTU_OS_RELEASE: &str = r#"PRETTY_NAME="Ubuntu 24.04.3 LTS"
 NAME="Ubuntu"
@@ -95,7 +95,7 @@ fn happ_request_is_byte_exact() {
     } else {
         ("2609151457", std::env::consts::ARCH)
     };
-    let marker = mihomyak::emulation::happ_day_marker(now);
+    let marker = mihomyak::client::emulation::happ_day_marker(now);
     let expected = include_str!("fixtures/requests/happ-4.3.0-linux-x64.http")
         .replace("{PORT}", &port.to_string())
         .replace("2609151457698", &format!("{build}{marker}98"))

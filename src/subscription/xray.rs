@@ -77,7 +77,7 @@ pub fn convert(json: &Json) -> Result<Converted, String> {
         warnings: Vec::new(),
     };
     // Proxy names must not shadow mihomo's built-in policies.
-    let mut names: std::collections::HashSet<String> = crate::profile::BUILTIN_NAMES
+    let mut names: std::collections::HashSet<String> = crate::mihomo::profile::BUILTIN_NAMES
         .iter()
         .map(|n| n.to_string())
         .collect();

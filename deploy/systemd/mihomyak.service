@@ -1,7 +1,7 @@
 # systemd unit for running mihomyak on bare metal (root: TUN/gateway capable).
 #   install -m 755 mihomyak /usr/local/bin/ && mihomyak core install --dest /usr/local/bin/mihomo
-#   install -m 600 examples/config.toml /etc/mihomyak/config.toml   # edit it
-#   cp contrib/mihomyak.service /etc/systemd/system/ && systemctl enable --now mihomyak
+#   install -m 600 deploy/config.example.toml /etc/mihomyak/config.toml   # edit it
+#   cp deploy/systemd/mihomyak.service /etc/systemd/system/ && systemctl enable --now mihomyak
 
 [Unit]
 Description=mihomyak (mihomo supervisor)

@@ -166,9 +166,9 @@ jobs:
           if-no-files-found: error
       - name: Validate compose files
         run: |
-          cp deploy/.env.example deploy/.env
-          docker compose -f deploy/compose.gateway.yml config --quiet
-          docker compose -f deploy/compose.proxy.yml config --quiet
+          cp deploy/docker/.env.example deploy/docker/.env
+          docker compose -f deploy/docker/compose.gateway.yml config --quiet
+          docker compose -f deploy/docker/compose.proxy.yml config --quiet
       # main only: publish the multi-arch `edge` image.
       - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v3

@@ -6,10 +6,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 
-use crate::api::Api;
+use crate::mihomo::api::Api;
 use crate::config::Config;
 use crate::subscription::{self, ProviderInfo};
-use crate::updater::{self, Outcome, Updater};
+use crate::service::updater::{self, Outcome, Updater};
 use crate::util::{fmt_bytes, fmt_duration, fmt_timestamp, now_unix, sanitize};
 
 pub(super) fn update(config: Config) -> Result<ExitCode> {
@@ -217,7 +217,7 @@ pub(super) fn check(config: Config) -> Result<ExitCode> {
     for warning in &built.warnings {
         println!("warning:      {}", sanitize(warning));
     }
-    let bin = crate::core::resolve_bin(cfg, &updater.store);
+    let bin = crate::mihomo::core::resolve_bin(cfg, &updater.store);
     match updater.check_config(&built) {
         Ok(None) => {
             println!("mihomo -t:    ok");
@@ -250,19 +250,19 @@ pub(super) fn identity(config: Config) -> Result<ExitCode> {
     println!("data dir:      {}", updater.store.root().display());
     let url = updater
         .url()
-        .or_else(|_| crate::http::Url::parse("https://sub.example.com/token"))?;
+        .or_else(|_| crate::client::http::Url::parse("https://sub.example.com/token"))?;
     println!("\nrequest headers for {}:", subscription::redact(&url));
     for (name, value) in e.headers(&url) {
         println!("  {name}: {value}");
     }
-    if !crate::emulation::is_valid_hwid(&d.hwid) {
+    if !crate::client::emulation::is_valid_hwid(&d.hwid) {
         println!("\nwarning: this HWID fails Remnawave's ^[a-zA-Z0-9=-]{{10,64}}$ check");
     }
     Ok(ExitCode::SUCCESS)
 }
 
 pub(super) fn status(config: Config) -> Result<ExitCode> {
-    let store = crate::store::Store::open(&config.data_dir)?;
+    let store = crate::service::store::Store::open(&config.data_dir)?;
     match store.load_meta() {
         Some(meta) => {
             let info = ProviderInfo::from_headers(&meta.headers);
