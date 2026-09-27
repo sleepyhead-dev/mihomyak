@@ -4,8 +4,9 @@
 #   docker buildx build --platform linux/arm64,linux/amd64 -t mihomyak .
 #
 # The Rust binary is cross-compiled on the build host (tonistiigi/xx, no QEMU);
-# the runtime layer is the official mihomo image (Alpine + mihomo + CA bundle +
-# geodata), so the final stage needs no RUN and no emulation.
+# the runtime layer is the filesystem of the official mihomo image (Alpine +
+# mihomo + CA bundle + tzdata + iptables + geodata), so the final stage needs no
+# RUN and no emulation.
 #
 # BINARY=prebuilt skips compilation and takes static binaries built elsewhere
 # (CI, scripts/build-static.sh) from dist/<arch>/mihomyak, where <arch> is
@@ -43,13 +44,22 @@ COPY --chmod=755 dist/${TARGETARCH}${TARGETVARIANT}/mihomyak /mihomyak
 # Unused stages are skipped: `prebuilt` needs no toolchain, `build` no dist/.
 FROM ${BINARY} AS binary
 
-FROM docker.io/metacubex/mihomo:${MIHOMO_VERSION}
+FROM docker.io/metacubex/mihomo:${MIHOMO_VERSION} AS mihomo
+
+# The official image declares VOLUME /root/.config/mihomo, so every container
+# would get an anonymous ~28 MB volume of geodata that outlives it, and it
+# carries mihomo's labels (version, revision…). Copying its filesystem keeps
+# mihomo, the CA bundle, tzdata, iptables and the geodata, drops that image
+# config, and still needs no RUN (no emulation for foreign platforms).
+FROM scratch
+COPY --from=mihomo / /
 LABEL org.opencontainers.image.title="mihomyak" \
       org.opencontainers.image.description="Lightweight mihomo supervisor for CIS subscriptions (FlClashX / Koala Clash / Happ emulation)" \
       org.opencontainers.image.source="https://github.com/sleepyhead-dev/mihomyak" \
       org.opencontainers.image.licenses="MIT"
 COPY --from=binary /mihomyak /usr/local/bin/mihomyak
-ENV MIHOMYAK_DATA_DIR=/data \
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    MIHOMYAK_DATA_DIR=/data \
     MIHOMYAK_CONFIG=/data/config.toml \
     MIHOMYAK_CORE_BIN=/mihomo \
     MIHOMYAK_GEODATA_DIR=/root/.config/mihomo

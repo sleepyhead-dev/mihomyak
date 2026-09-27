@@ -5,6 +5,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
 ## [Unreleased]
 
 ### Fixed
+- Docker image: it inherited `VOLUME /root/.config/mihomo` from `metacubex/mihomo`,
+  so every container left an anonymous ~28 MB geodata volume behind (noticed on
+  a Raspberry Pi SD card), and mihomo's image labels (version, revision, even a
+  foreign description). The runtime stage now copies the base filesystem into
+  `scratch`: same contents, only `/data` is a volume.
 - Gateway DNS leak on compose/user-defined networks: Docker's embedded DNS
   forwards host-inherited upstreams from the host's network namespace, so apps
   behind the gateway got real addresses from the host's resolver instead of

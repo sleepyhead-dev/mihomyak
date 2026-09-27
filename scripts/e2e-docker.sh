@@ -61,9 +61,13 @@ start() {
 
 docker run --rm "$image" --version
 docker run --rm "$image" --help >/dev/null
+# Only /data: an inherited volume would leave an anonymous one per container.
+volumes=$(docker image inspect -f '{{json .Config.Volumes}}' "$image")
+[ "$volumes" = '{"/data":{}}' ] || fail "unexpected image volumes: $volumes"
 
 echo "== explicit proxy"
 start mihomyak-e2e-proxy
+docker exec mihomyak-e2e-proxy test -s /data/mihomo/geoip.metadb || fail "geodata not seeded"
 
 echo "== TUN gateway with kill switch"
 start mihomyak-e2e-gateway --device /dev/net/tun --cap-add NET_ADMIN \

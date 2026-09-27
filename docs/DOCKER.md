@@ -1,8 +1,11 @@
 # Docker
 
 Образ: `ghcr.io/sleepyhead-dev/mihomyak` (`linux/amd64`, `linux/arm64`, `linux/arm/v7`).
-База — официальный образ `metacubex/mihomo`: mihomo, CA-сертификаты, tzdata и
-geo-базы. Бинарник mihomyak кросс-компилируется (`tonistiigi/xx`) без QEMU.
+База — файловая система официального образа `metacubex/mihomo`: mihomo,
+CA-сертификаты, tzdata, iptables и geo-базы. Его `VOLUME /root/.config/mihomo` не
+наследуется, так что контейнеры не оставляют за собой анонимных томов по 28 МБ.
+Бинарник mihomyak кросс-компилируется (`tonistiigi/xx`) без QEMU. Единственный том —
+`/data`: без `-v …:/data` Docker создаст анонимный, и вместе с ним пропадёт HWID.
 
 | Путь / переменная | Значение |
 |-------------------|----------|
