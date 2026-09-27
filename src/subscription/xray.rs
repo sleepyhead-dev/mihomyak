@@ -274,8 +274,16 @@ fn shadowsocks(node: &mut Mapping, server: &Json, stream: &Json) -> Result<(), S
             "shadowsocks over {network} is not supported by mihomo"
         ));
     }
-    set(node, "cipher", json_str(&server["method"]).ok_or("no ss method")?);
-    set(node, "password", json_str(&server["password"]).ok_or("no ss password")?);
+    set(
+        node,
+        "cipher",
+        json_str(&server["method"]).ok_or("no ss method")?,
+    );
+    set(
+        node,
+        "password",
+        json_str(&server["password"]).ok_or("no ss password")?,
+    );
     if server["uot"].as_bool() == Some(true) {
         set(node, "udp-over-tcp", true);
         if let Some(v) = server["UoTVersion"].as_u64() {
