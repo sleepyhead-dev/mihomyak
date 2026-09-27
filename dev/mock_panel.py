@@ -58,9 +58,10 @@ class Panel:
         """(name, share link) pairs served to clients."""
         if self.args.proxy:
             # The link's #fragment names the node, like in real subscriptions.
+            pairs = [link.partition("#") for link in self.args.proxy]
             return [
-                (urllib.parse.unquote(link.partition("#")[2]) or f"Real {i + 1}", link)
-                for i, link in enumerate(self.args.proxy)
+                (urllib.parse.unquote(name) or f"Real {i + 1}", link)
+                for i, (link, _, name) in enumerate(pairs)
             ]
         return [
             ("🇳🇱 Netherlands", "vless://11111111-2222-3333-4444-555555555555@nl.example.com:443"
