@@ -18,7 +18,8 @@ fn spawn_server(responses: Vec<Vec<u8>>) -> (u16, JoinHandle<()>) {
         for response in responses {
             let (mut sock, _) = listener.accept().unwrap();
             sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-            sock.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+            sock.set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
             let mut head = Vec::new();
             let mut byte = [0u8; 1];
             while !head.ends_with(b"\r\n\r\n") {
@@ -32,7 +33,10 @@ fn spawn_server(responses: Vec<Vec<u8>>) -> (u16, JoinHandle<()>) {
 }
 
 fn status_response(status: u16, reason: &str, body: &[u8]) -> Vec<u8> {
-    let head = format!("HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\n\r\n", body.len());
+    let head = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
     let mut wire = head.into_bytes();
     wire.extend_from_slice(body);
     wire
@@ -77,7 +81,9 @@ fn group_delay_of_a_fully_timed_out_group_is_empty() {
     let response = status_response(504, "Gateway Timeout", b"");
     let (port, server) = spawn_server(vec![response]);
 
-    let delays = api(port, "").group_delay("Auto", "https://example.com", 1000).unwrap();
+    let delays = api(port, "")
+        .group_delay("Auto", "https://example.com", 1000)
+        .unwrap();
     assert!(delays.is_empty());
 
     server.join().unwrap();
@@ -89,7 +95,9 @@ fn group_delay_parses_the_returned_map() {
     let response = status_response(200, "OK", body);
     let (port, server) = spawn_server(vec![response]);
 
-    let delays = api(port, "").group_delay("Auto", "https://example.com", 1000).unwrap();
+    let delays = api(port, "")
+        .group_delay("Auto", "https://example.com", 1000)
+        .unwrap();
     assert_eq!(delays.get("A"), Some(&123));
 
     server.join().unwrap();
@@ -102,14 +110,16 @@ fn sends_bearer_authorization_header() {
     let server = thread::spawn(move || {
         let (mut sock, _) = listener.accept().unwrap();
         sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        sock.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+        sock.set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         let mut head = Vec::new();
         let mut byte = [0u8; 1];
         while !head.ends_with(b"\r\n\r\n") {
             sock.read_exact(&mut byte).unwrap();
             head.push(byte[0]);
         }
-        sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}").unwrap();
+        sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+            .unwrap();
         String::from_utf8(head).unwrap()
     });
 

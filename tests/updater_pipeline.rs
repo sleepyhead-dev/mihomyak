@@ -27,7 +27,8 @@ fn spawn_server(responses: Vec<Vec<u8>>) -> (u16, JoinHandle<()>) {
         for response in responses {
             let (mut sock, _) = listener.accept().unwrap();
             sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-            sock.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+            sock.set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
             let mut head = Vec::new();
             let mut byte = [0u8; 1];
             while !head.ends_with(b"\r\n\r\n") {
@@ -51,7 +52,10 @@ fn status_response(
     body: &[u8],
     extra_headers: &[(&str, &str)],
 ) -> Vec<u8> {
-    let mut head = format!("HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\n", body.len());
+    let mut head = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\n",
+        body.len()
+    );
     for (name, value) in extra_headers {
         head.push_str(&format!("{name}: {value}\r\n"));
     }
@@ -91,7 +95,11 @@ fn good_subscription_is_applied() {
     let updater = Updater::new(test_config(dir.path(), port)).unwrap();
 
     match updater.update().unwrap() {
-        Outcome::Applied { changed, info, proxies } => {
+        Outcome::Applied {
+            changed,
+            info,
+            proxies,
+        } => {
             assert!(changed, "first update must write a new config");
             assert_eq!(proxies, 1);
             assert_eq!(info.usage.unwrap().total, 1_000_000_000);
@@ -101,8 +109,14 @@ fn good_subscription_is_applied() {
     }
 
     let config_path = updater.store.mihomo_config();
-    assert!(config_path.exists(), "config.yaml must exist in the store's mihomo dir");
-    let meta = updater.store.load_meta().expect("meta.json must be written");
+    assert!(
+        config_path.exists(),
+        "config.yaml must exist in the store's mihomo dir"
+    );
+    let meta = updater
+        .store
+        .load_meta()
+        .expect("meta.json must be written");
     assert_eq!(meta.format, "mihomo");
     assert_eq!(meta.proxies, 1);
     assert!(meta.last_error.is_none());
@@ -147,7 +161,10 @@ fn server_error_keeps_previous_config() {
         Outcome::Applied { .. } => panic!("an HTTP 500 must not be applied"),
     }
     let after = std::fs::read(updater.store.mihomo_config()).unwrap();
-    assert_eq!(before, after, "config.yaml must be untouched after a failed update");
+    assert_eq!(
+        before, after,
+        "config.yaml must be untouched after a failed update"
+    );
     let meta = updater.store.load_meta().unwrap();
     assert!(meta.last_error.is_some());
 
@@ -210,16 +227,31 @@ fn backup_is_kept_after_a_second_different_update() {
     let (port, server) = spawn_server(vec![first, second]);
     let updater = Updater::new(test_config(dir.path(), port)).unwrap();
 
-    assert!(matches!(updater.update().unwrap(), Outcome::Applied { changed: true, .. }));
+    assert!(matches!(
+        updater.update().unwrap(),
+        Outcome::Applied { changed: true, .. }
+    ));
     let config_path = updater.store.mihomo_config();
     let first_config = std::fs::read(&config_path).unwrap();
     let prev_path = config_path.with_file_name("config.yaml.prev");
-    assert!(!prev_path.exists(), "nothing to back up before the first write");
+    assert!(
+        !prev_path.exists(),
+        "nothing to back up before the first write"
+    );
 
-    assert!(matches!(updater.update().unwrap(), Outcome::Applied { changed: true, .. }));
+    assert!(matches!(
+        updater.update().unwrap(),
+        Outcome::Applied { changed: true, .. }
+    ));
     let second_config = std::fs::read(&config_path).unwrap();
-    assert_ne!(first_config, second_config, "the second update must rewrite the config");
-    assert!(prev_path.exists(), "the first config must be backed up as .prev");
+    assert_ne!(
+        first_config, second_config,
+        "the second update must rewrite the config"
+    );
+    assert!(
+        prev_path.exists(),
+        "the first config must be backed up as .prev"
+    );
     let backed_up = std::fs::read(&prev_path).unwrap();
     assert_eq!(backed_up, first_config);
 
@@ -239,7 +271,10 @@ fn flclashx_newdomain_over_http_is_not_followed() {
     assert!(matches!(updater.update().unwrap(), Outcome::Applied { .. }));
 
     let meta = updater.store.load_meta().unwrap();
-    assert!(meta.url_override.is_none(), "a plain-http newdomain header must be ignored");
+    assert!(
+        meta.url_override.is_none(),
+        "a plain-http newdomain header must be ignored"
+    );
     assert_eq!(updater.url().unwrap().to_string(), original_url);
 
     server.join().unwrap();

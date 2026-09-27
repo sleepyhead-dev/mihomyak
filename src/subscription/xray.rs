@@ -263,7 +263,11 @@ fn vless(node: &mut Mapping, user: &Json) -> Result<(), String> {
 fn vmess(node: &mut Mapping, user: &Json) -> Result<(), String> {
     set(node, "uuid", json_str(&user["id"]).ok_or("no vmess id")?);
     set(node, "alterId", user["alterId"].as_u64().unwrap_or(0));
-    set(node, "cipher", json_str(&user["security"]).unwrap_or("auto"));
+    set(
+        node,
+        "cipher",
+        json_str(&user["security"]).unwrap_or("auto"),
+    );
     Ok(())
 }
 
