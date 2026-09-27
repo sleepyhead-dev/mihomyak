@@ -100,7 +100,7 @@ cron работает как Vixie cron: если заданы и день ме�
 | Ключ | Env | Описание |
 |------|-----|----------|
 | `prepend` | — | свои правила mihomo перед правилами подписки: `"DOMAIN-SUFFIX,lan,DIRECT"` |
-| `presets` | `MIHOMYAK_RULES_PRESETS` | по умолчанию `["ru-direct"]`: `.ru`, `.su`, `.рф`, `geosite:category-ru` и `geoip:ru` идут напрямую. `[]` или пустая переменная — весь трафик через прокси |
+| `presets` | `MIHOMYAK_RULES_PRESETS` | по умолчанию нет (весь трафик через прокси). `ru-direct`: `.ru`, `.su`, `.рф`, `geosite:category-ru` и `geoip:ru` идут напрямую |
 
 `ru-direct` использует `GEOIP,ru,DIRECT,no-resolve`: домены не резолвятся ради
 проверки страны, чтобы все DNS-запросы не утекали к провайдеру.

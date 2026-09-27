@@ -1323,7 +1323,6 @@ rules: ["MATCH,Main"]
             default = true
             [rules]
             prepend = ["DOMAIN-SUFFIX,lan,DIRECT"]
-            presets = []
             "#,
         )
         .unwrap();

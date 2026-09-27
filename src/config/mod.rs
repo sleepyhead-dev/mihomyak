@@ -188,24 +188,14 @@ impl<'de> Deserialize<'de> for HumanDuration {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Rules {
     /// mihomo rules placed before the subscription's own, e.g.
     /// `"DOMAIN-SUFFIX,lan,DIRECT"` or `"DOMAIN-SUFFIX,example.com,Auto"`.
     pub prepend: Vec<String>,
-    /// Built-in rule sets inserted after `prepend`. Default: `ru-direct`;
-    /// `[]` (or an empty `MIHOMYAK_RULES_PRESETS`) sends everything through the proxy.
+    /// Built-in rule sets inserted after `prepend`: `ru-direct`. None by default.
     pub presets: Vec<Preset>,
-}
-
-impl Default for Rules {
-    fn default() -> Self {
-        Self {
-            prepend: Vec::new(),
-            presets: vec![Preset::RuDirect],
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -670,10 +660,10 @@ mod tests {
     }
 
     #[test]
-    fn defaults_refresh_on_start_and_route_russian_sites_directly() {
+    fn defaults_refresh_on_start_and_send_everything_through_the_proxy() {
         let config = Config::default();
         assert!(config.update.on_start);
-        assert_eq!(config.rules.presets, [Preset::RuDirect]);
+        assert!(config.rules.presets.is_empty());
         assert!(!config.gateway.allow_dns_leak);
 
         let with_env = |k: &'static str, v: &'static str| {
@@ -683,7 +673,8 @@ mod tests {
                 .unwrap();
             config
         };
-        // An empty value switches every preset off.
+        let enabled = with_env("MIHOMYAK_RULES_PRESETS", "ru-direct");
+        assert_eq!(enabled.rules.presets, [Preset::RuDirect]);
         let presets = with_env("MIHOMYAK_RULES_PRESETS", "").rules.presets;
         assert!(presets.is_empty());
         let gateway = with_env("MIHOMYAK_ALLOW_DNS_LEAK", "1").gateway;

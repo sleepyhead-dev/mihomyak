@@ -4,6 +4,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
 
 ## [Unreleased]
 
+### Changed
+- The `ru-direct` preset is off by default again: all traffic goes through the
+  VPN unless `MIHOMYAK_RULES_PRESETS=ru-direct` is set.
+
 ## [0.2.0] - 2026-09-27
 
 Tested by hand on a Raspberry Pi 3B+ (arm64) and automatically on every change
