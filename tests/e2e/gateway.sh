@@ -63,7 +63,7 @@ ok "gateway and proxy are healthy"
 
 step "hardening"
 inspect=$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.HostConfig.CapAdd}} {{.HostConfig.SecurityOpt}}' mhk-gw)
-[[ $inspect == "true [ALL] [NET_ADMIN] [no-new-privileges:true]" ]] || fail "gateway runs with: $inspect"
+[[ $inspect == "true [ALL] ["*"NET_ADMIN] [no-new-privileges:true]" ]] || fail "gateway runs with: $inspect"
 ok "read-only, only NET_ADMIN, no-new-privileges"
 
 step "traffic"

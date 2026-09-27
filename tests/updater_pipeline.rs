@@ -1,4 +1,4 @@
-//! Integration tests for the subscription update pipeline (`src/updater.rs`)
+//! Integration tests for the subscription update pipeline (`src/service/updater.rs`)
 //! against in-process fake HTTP servers, following the pattern in
 //! `tests/golden_requests.rs`.
 
@@ -9,9 +9,9 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use mihomyak::config::Config;
-use mihomyak::emulation::ClientKind;
+use mihomyak::client::emulation::ClientKind;
 use mihomyak::subscription::Problem;
-use mihomyak::updater::{Outcome, Updater};
+use mihomyak::service::updater::{Outcome, Updater};
 
 const GOOD_BODY: &[u8] = include_bytes!("fixtures/subscriptions/remnawave-mihomo.yaml");
 /// Remnawave-style stub: a single placeholder proxy, no real servers.
@@ -70,8 +70,10 @@ fn status_response(
 /// config through, so tests are deterministic without depending on a mihomo binary
 /// or `PATH` in CI.
 fn test_config(dir: &Path, port: u16) -> Config {
-    let mut config = Config::default();
-    config.data_dir = dir.to_path_buf();
+    let mut config = Config {
+        data_dir: dir.to_path_buf(),
+        ..Config::default()
+    };
     config.subscription.url = Some(format!("http://127.0.0.1:{port}/sub/abc"));
     config.subscription.client = ClientKind::FlClashX;
     config.core.bin = dir.join("no-such-mihomo-binary");
