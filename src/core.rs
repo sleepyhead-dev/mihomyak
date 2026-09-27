@@ -285,3 +285,68 @@ fn get(client: &Client, url: &Url, max_redirects: usize) -> Result<crate::http::
     }
     bail!("too many redirects")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_bin_prefers_an_explicit_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin_path = dir.path().join("custom-mihomo");
+        std::fs::write(&bin_path, b"#!/bin/sh\n").unwrap();
+        let mut config = Config::default();
+        config.core.bin = bin_path.clone();
+        let store = Store::open(&dir.path().join("data")).unwrap();
+        assert_eq!(resolve_bin(&config, &store), bin_path);
+    }
+
+    #[test]
+    fn resolve_bin_falls_back_to_the_data_dir_when_missing_from_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("data")).unwrap();
+        // Distinctive name: it must not exist anywhere on the real PATH.
+        let name = "mihomyak-test-fake-core-bin";
+        let bin_dir = store.root().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let seeded = bin_dir.join(name);
+        std::fs::write(&seeded, b"#!/bin/sh\n").unwrap();
+
+        let mut config = Config::default();
+        config.core.bin = PathBuf::from(name);
+        assert_eq!(resolve_bin(&config, &store), seeded);
+    }
+
+    #[test]
+    fn resolve_bin_falls_back_to_the_bare_name_when_nowhere_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("data")).unwrap();
+        let name = "mihomyak-test-missing-core-bin";
+        let mut config = Config::default();
+        config.core.bin = PathBuf::from(name);
+        assert_eq!(resolve_bin(&config, &store), PathBuf::from(name));
+    }
+
+    #[test]
+    fn seed_geodata_copies_missing_files_but_never_overwrites() {
+        let src_dir = tempfile::tempdir().unwrap();
+        let home_dir = tempfile::tempdir().unwrap();
+        std::fs::write(src_dir.path().join("geoip.metadb"), b"new-geoip").unwrap();
+        std::fs::write(src_dir.path().join("geosite.dat"), b"new-geosite").unwrap();
+        // geoip.dat / GeoLite2-ASN.mmdb / ASN.mmdb are intentionally absent from src.
+        std::fs::write(home_dir.path().join("geosite.dat"), b"existing-geosite").unwrap();
+
+        seed_geodata(src_dir.path(), home_dir.path());
+
+        assert_eq!(
+            std::fs::read(home_dir.path().join("geoip.metadb")).unwrap(),
+            b"new-geoip"
+        );
+        assert_eq!(
+            std::fs::read(home_dir.path().join("geosite.dat")).unwrap(),
+            b"existing-geosite",
+            "an existing file is never overwritten"
+        );
+        assert!(!home_dir.path().join("geoip.dat").exists());
+    }
+}

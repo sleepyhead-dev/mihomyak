@@ -778,6 +778,40 @@ mod tests {
     }
 
     #[test]
+    fn controller_off_loopback_needs_a_non_empty_secret() {
+        let mut config = Config::default();
+        config.core.controller = "0.0.0.0:9090".into();
+        config.core.secret = Some(String::new());
+        assert!(
+            config.validate().is_err(),
+            "an empty secret must not be exposed to the network"
+        );
+
+        config.core.secret = None;
+        assert!(
+            config.validate().is_ok(),
+            "no configured secret is only warned about, not rejected"
+        );
+
+        config.core.secret = Some("s3cret".into());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn loopback_controller_needs_no_secret() {
+        let mut config = Config::default();
+        config.core.controller = "127.0.0.1:9090".into();
+        config.core.secret = None;
+        assert!(config.validate().is_ok());
+
+        config.core.controller = "localhost:9090".into();
+        assert!(config.validate().is_ok());
+
+        config.core.controller = "unix:/run/mihomyak/mihomo.sock".into();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
     fn only_files_with_secrets_need_private_permissions() {
         let holds = |text: &str| toml::from_str::<Config>(text).unwrap().holds_secrets();
         assert!(!holds(
