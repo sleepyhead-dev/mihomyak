@@ -203,7 +203,7 @@ pub(super) fn check(config: Config) -> Result<ExitCode> {
         }
     );
     if cfg.gateway.enable
-        && let Some(warning) = crate::gateway::dns_warning()
+        && let Some(warning) = crate::gateway::dns_leak()
     {
         println!("warning:      {warning}");
     }

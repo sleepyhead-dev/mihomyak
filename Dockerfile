@@ -66,7 +66,8 @@ ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
 VOLUME ["/data"]
 # mixed (HTTP+SOCKS5) proxy port; the API stays on 127.0.0.1:9090 unless configured.
 EXPOSE 7890
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+# start-interval: apps waiting on `service_healthy` start seconds after mihomo does.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s --retries=3 \
     CMD ["mihomyak", "health"]
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["mihomyak"]

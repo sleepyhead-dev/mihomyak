@@ -71,15 +71,25 @@ impl Default for Subscription {
 }
 
 /// When the subscription is refreshed. All triggers combine: the earliest wins.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Update {
     /// `auto` (provider's `profile-update-interval`, else 24h), `off`, or e.g. `12h`.
     pub interval: Interval,
     /// Cron expressions in local time (`TZ`), e.g. `["0 5 * * *"]`.
     pub cron: Vec<String>,
-    /// Refetch at every start instead of reusing a cache that is not yet due.
+    /// Refetch at every start; the cached subscription runs meanwhile.
     pub on_start: bool,
+}
+
+impl Default for Update {
+    fn default() -> Self {
+        Self {
+            interval: Interval::Auto,
+            cron: Vec::new(),
+            on_start: true,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -175,14 +185,24 @@ impl<'de> Deserialize<'de> for HumanDuration {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Rules {
     /// mihomo rules placed before the subscription's own, e.g.
     /// `"DOMAIN-SUFFIX,lan,DIRECT"` or `"DOMAIN-SUFFIX,example.com,Auto"`.
     pub prepend: Vec<String>,
-    /// Built-in rule sets inserted after `prepend`: `ru-direct`.
+    /// Built-in rule sets inserted after `prepend`. Default: `ru-direct`;
+    /// `[]` (or an empty `MIHOMYAK_RULES_PRESETS`) sends everything through the proxy.
     pub presets: Vec<Preset>,
+}
+
+impl Default for Rules {
+    fn default() -> Self {
+        Self {
+            prepend: Vec::new(),
+            presets: vec![Preset::RuDirect],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -241,9 +261,12 @@ impl std::str::FromStr for Interval {
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Device {
-    /// Seed every client derives its HWID from (like `/etc/machine-id`).
-    /// Default: generated once and stored in the data directory.
+    /// What every client derives its HWID from (like `/etc/machine-id`).
+    /// Default: derived from `seed`, else generated once and stored in the data directory.
     pub machine_id: Option<String>,
+    /// Any secret string the machine-id is derived from: the same seed is the same
+    /// device (same HWID) on any host, without keeping the data directory.
+    pub seed: Option<String>,
     /// Final `x-hwid` value, bypassing the client-specific derivation.
     pub hwid: Option<String>,
     /// Send the `x-hwid`/`x-device-*` headers (FlClashX "send device headers" toggle).
@@ -265,6 +288,7 @@ impl Default for Device {
     fn default() -> Self {
         Self {
             machine_id: None,
+            seed: None,
             hwid: None,
             send_headers: true,
             os_release: PathBuf::from("/etc/os-release"),
@@ -352,6 +376,9 @@ pub struct Gateway {
     pub dns_listen: String,
     /// Block traffic that would bypass mihomo while it is down (see `killswitch`).
     pub kill_switch: bool,
+    /// Start even though Docker resolves the apps' names outside the tunnel
+    /// (see `gateway::dns_leak`). Off: such a gateway refuses to start.
+    pub allow_dns_leak: bool,
 }
 
 impl Default for Gateway {
@@ -362,6 +389,7 @@ impl Default for Gateway {
             auto_redirect: false,
             dns_listen: "127.0.0.1:1053".into(),
             kill_switch: false,
+            allow_dns_leak: false,
         }
     }
 }
@@ -409,6 +437,7 @@ impl Config {
             || self.core.secret.is_some()
             || !self.core.auth.is_empty()
             || self.device.machine_id.is_some()
+            || self.device.seed.is_some()
             || self.device.hwid.is_some()
     }
 
@@ -469,6 +498,9 @@ impl Config {
         if let Some(v) = env("MIHOMYAK_MACHINE_ID") {
             dev.machine_id = Some(v);
         }
+        if let Some(v) = env("MIHOMYAK_DEVICE_SEED") {
+            dev.seed = Some(v);
+        }
         if let Some(v) = env("MIHOMYAK_HWID") {
             dev.hwid = Some(v);
         }
@@ -518,10 +550,19 @@ impl Config {
         if let Some(v) = flag("MIHOMYAK_KILL_SWITCH")? {
             self.gateway.kill_switch = v;
         }
+        if let Some(v) = flag("MIHOMYAK_ALLOW_DNS_LEAK")? {
+            self.gateway.allow_dns_leak = v;
+        }
         Ok(())
     }
 
     fn validate(&self) -> Result<()> {
+        if self.device.machine_id.is_some() && self.device.seed.is_some() {
+            bail!("set either device.machine_id or device.seed, not both");
+        }
+        if self.device.seed.as_deref().is_some_and(|s| s.trim().is_empty()) {
+            bail!("device.seed is empty");
+        }
         if let Some(url) = &self.subscription.url {
             crate::http::Url::parse(url).context("subscription.url")?;
         }
@@ -861,5 +902,46 @@ mod tests {
         };
         assert!(bad("MIHOMYAK_GATEWAY", "maybe"));
         assert!(bad("MIHOMYAK_MIXED_PORT", "99999"));
+    }
+
+    #[test]
+    fn defaults_refresh_on_start_and_route_russian_sites_directly() {
+        let config = Config::default();
+        assert!(config.update.on_start);
+        assert_eq!(config.rules.presets, [Preset::RuDirect]);
+        assert!(!config.gateway.allow_dns_leak);
+
+        let with_env = |k: &'static str, v: &'static str| {
+            let mut config = Config::default();
+            config
+                .apply_env(&move |key| (key == k).then(|| v.to_string()))
+                .unwrap();
+            config
+        };
+        // An empty value switches every preset off.
+        let presets = with_env("MIHOMYAK_RULES_PRESETS", "").rules.presets;
+        assert!(presets.is_empty());
+        let gateway = with_env("MIHOMYAK_ALLOW_DNS_LEAK", "1").gateway;
+        assert!(gateway.allow_dns_leak);
+        let update = with_env("MIHOMYAK_UPDATE_ON_START", "0").update;
+        assert!(!update.on_start);
+        let file: Config = toml::from_str("[rules]\npresets = []").unwrap();
+        assert!(file.rules.presets.is_empty());
+        let seeded = with_env("MIHOMYAK_DEVICE_SEED", "phrase");
+        assert_eq!(seeded.device.seed.as_deref(), Some("phrase"));
+    }
+
+    #[test]
+    fn seed_is_an_alternative_to_the_machine_id() {
+        let mut config = Config::default();
+        config.device.seed = Some("phrase".into());
+        config.validate().unwrap();
+        assert!(config.holds_secrets());
+
+        config.device.machine_id = Some("0d0af05ee8fd4dc29275718f2ce4dff1".into());
+        assert!(config.validate().is_err(), "both at once is ambiguous");
+        config.device.machine_id = None;
+        config.device.seed = Some("  ".into());
+        assert!(config.validate().is_err());
     }
 }

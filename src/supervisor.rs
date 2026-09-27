@@ -47,19 +47,21 @@ enum Event {
 pub fn run(config: Config) -> Result<()> {
     let updater = Updater::new(config)?;
     let _lock = updater.store.lock_supervisor()?;
+    let gateway = &updater.config.gateway;
+    if gateway.enable
+        && let Some(leak) = crate::gateway::dns_leak()
+    {
+        if !gateway.allow_dns_leak {
+            bail!("{leak}");
+        }
+        crate::warn!("{leak}");
+    }
     // Before anything else: from here on nothing may bypass mihomo. Dropped (rules
     // removed) only when `run` returns.
-    let _kill_switch = updater
-        .config
-        .gateway
+    let _kill_switch = gateway
         .kill_switch
         .then(crate::killswitch::enable)
         .transpose()?;
-    if updater.config.gateway.enable
-        && let Some(warning) = crate::gateway::dns_warning()
-    {
-        crate::warn!("{warning}");
-    }
     Supervisor::new(updater)?.run()
 }
 

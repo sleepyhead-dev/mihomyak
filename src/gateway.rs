@@ -28,8 +28,8 @@ pub fn docker_dns_via_host(resolv_conf: &str) -> Option<String> {
         .then(|| crate::util::sanitize(servers))
 }
 
-/// A warning when app DNS would bypass the tunnel (see the module docs).
-pub fn dns_warning() -> Option<String> {
+/// Why app DNS would bypass the tunnel here, if it would (see the module docs).
+pub fn dns_leak() -> Option<String> {
     let mut text = String::new();
     std::fs::File::open(RESOLV_CONF)
         .ok()?
@@ -41,7 +41,8 @@ pub fn dns_warning() -> Option<String> {
             "Docker resolves names for this container through the host's resolver \
              {servers}, outside the tunnel: apps get real addresses and their DNS \
              lookups leak. Give the gateway an explicit DNS server (compose: \
-             `dns: [1.1.1.1]`, docker run: `--dns 1.1.1.1`); see docs/DOCKER.md"
+             `dns: [1.1.1.1]`, docker run: `--dns 1.1.1.1`) or, to accept the leak, \
+             set MIHOMYAK_ALLOW_DNS_LEAK=1; see docs/DOCKER.md"
         )
     })
 }

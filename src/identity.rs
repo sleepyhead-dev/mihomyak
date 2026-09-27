@@ -26,9 +26,10 @@ pub struct Identity {
 
 impl Identity {
     pub fn load(config: &Config, store: &Store) -> Result<Self> {
-        let machine_id = match &config.device.machine_id {
-            Some(id) => id.trim().to_owned(),
-            None => store.machine_id()?,
+        let machine_id = match (&config.device.machine_id, &config.device.seed) {
+            (Some(id), _) => id.trim().to_owned(),
+            (None, Some(seed)) => machine_id_from_seed(seed),
+            (None, None) => store.machine_id()?,
         };
         if machine_id.is_empty() {
             bail!("device.machine_id is empty");
@@ -188,6 +189,13 @@ pub fn generate_machine_id() -> Result<String> {
     crate::util::random_hex(16).context("generate machine-id")
 }
 
+/// The machine-id a `device.seed` stands for, in systemd's format. The prefix
+/// keeps it unrelated to any other use of the same string.
+pub fn machine_id_from_seed(seed: &str) -> String {
+    let input = format!("mihomyak device seed\0{}", seed.trim());
+    crate::util::sha256_hex(input.as_bytes())[..32].to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,5 +276,37 @@ ID=ubuntu
         assert!(is_valid_machine_id(&id));
         assert!(!is_valid_machine_id("has space"));
         assert!(!is_valid_machine_id(""));
+    }
+
+    #[test]
+    fn seeds_give_stable_distinct_machine_ids() {
+        let a = machine_id_from_seed("my home server");
+        assert_eq!(a.len(), 32);
+        assert!(a.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
+        assert_eq!(a, machine_id_from_seed("  my home server\n"));
+        assert_ne!(a, machine_id_from_seed("my home server 2"));
+        // Pinned: changing the derivation would move every seeded user to a new device.
+        assert_eq!(
+            machine_id_from_seed("seed"),
+            &crate::util::sha256_hex(b"mihomyak device seed\0seed")[..32]
+        );
+    }
+
+    #[test]
+    fn seed_or_explicit_machine_id_wins_over_the_stored_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let mut config = Config::default();
+        config.device.seed = Some("seed".into());
+        let seeded = Identity::load(&config, &store).unwrap().machine_id;
+        assert_eq!(seeded, machine_id_from_seed("seed"));
+        config.device.seed = None;
+        config.device.machine_id = Some("0d0af05ee8fd4dc29275718f2ce4dff1".into());
+        let explicit = Identity::load(&config, &store).unwrap().machine_id;
+        assert_eq!(explicit, "0d0af05ee8fd4dc29275718f2ce4dff1");
+        config.device.machine_id = None;
+        let stored = Identity::load(&config, &store).unwrap().machine_id;
+        assert_ne!(stored, seeded);
+        assert_eq!(stored, store.machine_id().unwrap());
     }
 }

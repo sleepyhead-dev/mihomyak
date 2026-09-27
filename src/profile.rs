@@ -1235,7 +1235,10 @@ rules:
         // A provider's own groups and rules are left alone.
         let v = built(&parsed(REMNAWAVE), &Config::default());
         assert_eq!(v["proxy-groups"].as_sequence().unwrap().len(), 1);
-        assert_eq!(v["rules"][0].as_str(), Some("MATCH,→ Remnawave"));
+        assert_eq!(
+            v["rules"].as_sequence().unwrap().last().unwrap().as_str(),
+            Some("MATCH,→ Remnawave")
+        );
     }
 
     const THREE_NODES: &str = r#"
@@ -1316,6 +1319,7 @@ rules: ["MATCH,Main"]
             default = true
             [rules]
             prepend = ["DOMAIN-SUFFIX,lan,DIRECT"]
+            presets = []
             "#,
         )
         .unwrap();
