@@ -560,7 +560,9 @@ impl Config {
         if self.device.machine_id.is_some() && self.device.seed.is_some() {
             bail!("set either device.machine_id or device.seed, not both");
         }
-        if self.device.seed.as_deref().is_some_and(|s| s.trim().is_empty()) {
+        if let Some(seed) = &self.device.seed
+            && seed.trim().is_empty()
+        {
             bail!("device.seed is empty");
         }
         if let Some(url) = &self.subscription.url {
