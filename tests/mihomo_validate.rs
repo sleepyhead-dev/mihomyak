@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use mihomyak::config::Config;
-use mihomyak::profile::Params;
+use mihomyak::mihomo::profile::Params;
 use mihomyak::subscription::body;
 
 fn mihomo() -> Option<PathBuf> {
@@ -19,9 +19,17 @@ fn mihomo() -> Option<PathBuf> {
 }
 
 fn validate(name: &str, body: &[u8], gateway: bool) {
-    let mut config = Config::default();
+    let mut config = no_geodata_config();
     config.gateway.enable = gateway;
     validate_with(name, body, &config);
+}
+
+/// The default `ru-direct` preset has GEOSITE/GEOIP rules, and `mihomo -t` would
+/// download geodata for them in every test.
+fn no_geodata_config() -> Config {
+    let mut config = Config::default();
+    config.rules.presets.clear();
+    config
 }
 
 fn validate_with(name: &str, body: &[u8], config: &Config) {
@@ -37,13 +45,13 @@ fn validate_with(name: &str, body: &[u8], config: &Config) {
             "2001:db8::7".parse().unwrap(),
         ],
     };
-    let built = mihomyak::profile::build(&content, config, &params)
+    let built = mihomyak::mihomo::profile::build(&content, config, &params)
         .unwrap_or_else(|e| panic!("{name}: {e:#}"));
     let Some(bin) = mihomo() else { return };
     let home = tempfile::tempdir().unwrap();
     std::fs::write(home.path().join("config.yaml"), &built.config_yaml).unwrap();
     if let Some(provider) = &built.provider {
-        let path = home.path().join(mihomyak::profile::PROVIDER_FILE);
+        let path = home.path().join(mihomyak::mihomo::profile::PROVIDER_FILE);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, provider).unwrap();
     }
@@ -84,7 +92,7 @@ fn remnawave_mihomo_yaml_gateway() {
 
 #[test]
 fn remnawave_mihomo_yaml_gateway_kill_switch() {
-    let mut config = Config::default();
+    let mut config = no_geodata_config();
     config.gateway.enable = true;
     config.gateway.kill_switch = true;
     validate_with(
@@ -128,6 +136,7 @@ type = "url-test"
 
 [rules]
 prepend = ["DOMAIN-SUFFIX,lan,DIRECT", "DOMAIN-SUFFIX,example.org,Fastest"]
+presets = []
 "#;
 
 #[test]

@@ -4,45 +4,68 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
 
 ## [Unreleased]
 
-### Fixed
-- Docker image: it inherited `VOLUME /root/.config/mihomo` from `metacubex/mihomo`,
-  so every container left an anonymous ~28 MB geodata volume behind (noticed on
-  a Raspberry Pi SD card), and mihomo's image labels (version, revision, even a
-  foreign description). The runtime stage now copies the base filesystem into
-  `scratch`: same contents, only `/data` is a volume.
-- Gateway DNS leak on compose/user-defined networks: Docker's embedded DNS
-  forwards host-inherited upstreams from the host's network namespace, so apps
-  behind the gateway got real addresses from the host's resolver instead of
-  mihomo's fake-ip. `compose.gateway.yml` now sets `dns:` on the gateway, and
-  mihomyak warns at start and in `check` when Docker forwards past the tunnel.
-  Found on a Raspberry Pi 3B+ (Docker 29.8); covered by the Docker e2e test.
-- Apps behind a restarted gateway (`docker compose restart mihomyak`) were left
-  in the old network namespace without any network. The example app in
-  `compose.gateway.yml` now has `depends_on: … restart: true`, so Compose
-  restarts it after the gateway; documented in docs/DOCKER.md.
+## [0.2.0] - 2026-09-27
 
-- The permission warning for the config file ("readable by other users…") was
-  printed for any config, also one without secrets; now only when the file
-  holds the subscription URL, proxy passwords, the API secret or the device id.
+Tested by hand on a Raspberry Pi 3B+ (arm64) and automatically on every change
+with a gateway stand on amd64 and arm64.
 
-- A panel that trickles data until the 90 s request deadline was reported as
-  "no data from the server for 30s"; the error now names the deadline. The
-  first start with a refused subscription no longer logs "keeping the current
-  config" (there is none yet).
-
-### Changed
-- First start without a cached subscription: network errors are retried after
-  5, 10, 20, 40 s… instead of 1, 2, 4 min (nothing runs until the first
-  config, a gateway has no network at all). Panel refusals keep the slow pace.
-- CI: images pack the static binaries of the build job instead of compiling
-  again in Docker (the multi-arch `edge` image no longer builds three targets);
-  the test suite also runs for aarch64 and armv7 under qemu; releases publish
-  the binaries CI built and tested; the arm64 image of every PR is an artifact.
-  `docker build .` from source still works and is checked on `main`.
+### Upgrading from 0.1.0
+- The compose files moved to `deploy/docker/` and now pin the project name
+  `mihomyak`, so the data volume is `mihomyak_data`. The old one was named after
+  the directory (usually `deploy_mihomyak-data`) and holds your device id: set
+  `MIHOMYAK_DEVICE_SEED` (a new device once, then stable forever) or copy the
+  old id with `docker run --rm -v deploy_mihomyak-data:/data alpine cat /data/machine-id`
+  into `MIHOMYAK_MACHINE_ID`.
+- A gateway now refuses to start when Docker would resolve the apps' names
+  outside the tunnel: keep `dns:` on the gateway service (see below).
+- `update.on_start` and the `ru-direct` preset are on by default; set
+  `MIHOMYAK_RULES_PRESETS=` (empty) to send all traffic through the VPN.
 
 ### Added
-- `tests/e2e/`: a hands-on gateway lab for an ARM box (test clients behind the
-  gateway, a control container, mock panel and nodes).
+- `device.seed` / `MIHOMYAK_DEVICE_SEED`: the device (HWID) is derived from a
+  secret phrase, the same on any server and after reinstalls; several gateways
+  with one seed are one device for the provider.
+- `gateway.allow_dns_leak` / `MIHOMYAK_ALLOW_DNS_LEAK` to accept the DNS leak
+  explicitly.
+- Documentation rewritten for users: README (Russian and English) with three
+  ways to install and autostart, docs/DOCKER.md with several-project setups
+  (per-project gateways with one seed, a shared proxy network, a shared
+  gateway), docs/FAQ.md; developer docs in docs/dev/.
+- Tests: integration tests for the update pipeline and the mihomo API client
+  against fake servers, more unit tests, and `tests/e2e/gateway.sh`: a stand
+  with a fake panel, two shadowsocks nodes and a target behind them (traffic
+  through a node, fake-ip DNS, explicit proxy, bad and hostile panels, device
+  limit, Happ formats, fallback, kill switch, restart from cache, clean stop).
+
+### Changed
+- `compose.gateway.yml` turns the kill switch on; `compose.proxy.yml` puts the
+  proxy on a shared network `mihomyak` that other compose projects can join;
+  both download standalone (no build context needed).
+- First start without a cached subscription retries network errors after 5, 10,
+  20 s… instead of 1, 2, 4 min. Panel refusals keep the slow pace.
+- The image healthcheck polls every 2 s during start-up, so apps waiting for the
+  gateway start seconds after it.
+- Sources grouped by concern (`cli`, `client`, `config`, `mihomo`, `service`,
+  `gateway`, `subscription`, `util`); deployment files in `deploy/`.
+- Release archives have stable names (`releases/latest/download/mihomyak-<target>.tar.gz`)
+  and contain exactly the binaries CI built and tested; published archives and
+  images are verified on amd64 and arm64 after every release.
+- CI: images pack the build job's binaries instead of compiling again; the test
+  suite also runs for aarch64 and armv7 (qemu); the gateway stand runs natively
+  on amd64 and arm64; coverage is reported.
+
+### Fixed
+- **Gateway DNS leak on compose networks.** Docker's embedded DNS resolves
+  host-inherited upstreams from the host's network namespace, so apps behind the
+  gateway got real addresses from the host's resolver instead of mihomo's
+  fake-ip. The gateway now has `dns:` in compose and refuses to start without it.
+- Apps behind a restarted gateway were left without any network; `depends_on …
+  restart: true` makes Compose restart them.
+- The Docker image inherited `VOLUME /root/.config/mihomo` from the base image:
+  every container left a ~28 MB anonymous volume behind.
+- A panel trickling data until the 90 s deadline was reported as "no data for
+  30s"; the permission warning showed for config files without secrets; the
+  first refused update logged "keeping the current config" when there was none.
 
 ## [0.1.0] - 2026-09-26
 

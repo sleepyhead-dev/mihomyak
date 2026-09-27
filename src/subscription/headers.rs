@@ -1,4 +1,4 @@
-//! Provider metadata carried in response headers (see docs/SUBSCRIPTIONS.md §2.4).
+//! Provider metadata carried in response headers (see docs/dev/SUBSCRIPTIONS.md §2.4).
 
 use std::time::Duration;
 

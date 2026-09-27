@@ -1,0 +1,68 @@
+# mihomyak as a transparent VPN gateway for other containers.
+#
+# Containers that join its network (`network_mode: service:mihomyak`) reach the
+# internet only through the VPN, DNS included, with no proxy settings inside.
+#
+#   put this file and .env (from .env.example, chmod 600) into one directory, then
+#   docker compose -f compose.gateway.yml up -d
+#   docker compose -f compose.gateway.yml exec mihomyak mihomyak status
+#
+# To build the image from a checkout instead of pulling it, add `build: ../..`.
+
+name: mihomyak
+
+services:
+  mihomyak:
+    image: ghcr.io/sleepyhead-dev/mihomyak:latest
+    container_name: mihomyak
+    # Reported to the provider by the Happ emulation (X-Device-Model: <hostname>_<arch>).
+    hostname: ${MIHOMYAK_HOSTNAME:-home-server}
+    # Also brings the gateway back after a reboot (with Docker enabled at boot).
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MIHOMYAK_GATEWAY: "1"
+      # Block app traffic while mihomo is down instead of letting it go direct
+      # (MIHOMYAK_KILL_SWITCH=0 in .env turns it off).
+      MIHOMYAK_KILL_SWITCH: ${MIHOMYAK_KILL_SWITCH:-1}
+    volumes:
+      - data:/data
+      # Fine-tuning (groups, rules, any mihomo key): see config.example.toml.
+      # - ./config.toml:/data/config.toml:ro
+      # Report the host's distro instead of the image's Alpine in device headers.
+      # - /etc/os-release:/etc/os-release:ro
+    # Required. Without an explicit server Docker resolves the apps' names on the
+    # host, outside the tunnel, and the gateway refuses to start. Any server works,
+    # your router included: mihomo answers while it runs.
+    dns: [1.1.1.1, 8.8.8.8]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    # mihomo idles at ~40 MiB; the cap keeps a runaway core from starving the host.
+    mem_limit: 256m
+    pids_limit: 256
+    # Leaves mihomo time to remove its routes (the supervisor waits 8 s for it).
+    stop_grace_period: 15s
+    # Ports of the apps below are published here: they share this network.
+    # ports:
+    #   - "127.0.0.1:8080:80"
+
+  # Your containers. Each one joins the gateway's network:
+  #
+  # my-app:
+  #   image: nginx:alpine
+  #   network_mode: service:mihomyak
+  #   depends_on:
+  #     mihomyak:
+  #       condition: service_healthy
+  #       # A restarted gateway gets a new network; Compose then restarts the app,
+  #       # which would otherwise be left without any network.
+  #       restart: true
+  #   restart: unless-stopped
+
+volumes:
+  data:

@@ -11,7 +11,7 @@
    Docker конфиг необязателен);
 3. переменные окружения `MIHOMYAK_*`.
 
-Полный пример с комментариями: [examples/config.toml](../examples/config.toml).
+Полный пример с комментариями: [deploy/config.example.toml](../deploy/config.example.toml).
 Проверка настроек: `mihomyak check`. Итоговый конфиг mihomo: `mihomyak render`.
 
 Неизвестный ключ в TOML — это ошибка, а не молчаливое игнорирование. Настройки
@@ -45,7 +45,7 @@
 |------|--------------|-----|----------|
 | `interval` | `auto` | `MIHOMYAK_UPDATE_INTERVAL` | `auto` (`profile-update-interval` провайдера, иначе 24h), `off`, `6h`, `30m`… (минимум 5 минут) |
 | `cron` | `[]` | `MIHOMYAK_UPDATE_CRON` (`;`-список) | cron из 5 полей в локальном времени (`TZ`): `0 5 * * *`, `*/30 * * * *`, `@daily`, имена `mon-fri`, `jan` |
-| `on_start` | `false` | `MIHOMYAK_UPDATE_ON_START` | обновлять при каждом старте; пока идёт загрузка, работает кэш |
+| `on_start` | `true` | `MIHOMYAK_UPDATE_ON_START` | обновлять при каждом старте; пока идёт загрузка, работает кэш |
 
 Следующее обновление — самое раннее из интервала и всех cron-выражений. Если
 запуск был пропущен (машина была выключена в 05:00), он выполняется сразу при
@@ -100,7 +100,7 @@ cron работает как Vixie cron: если заданы и день ме�
 | Ключ | Env | Описание |
 |------|-----|----------|
 | `prepend` | — | свои правила mihomo перед правилами подписки: `"DOMAIN-SUFFIX,lan,DIRECT"` |
-| `presets` | `MIHOMYAK_RULES_PRESETS` | `ru-direct`: `.ru`, `.su`, `.рф`, `geosite:category-ru` и `geoip:ru` идут напрямую |
+| `presets` | `MIHOMYAK_RULES_PRESETS` | по умолчанию `["ru-direct"]`: `.ru`, `.su`, `.рф`, `geosite:category-ru` и `geoip:ru` идут напрямую. `[]` или пустая переменная — весь трафик через прокси |
 
 `ru-direct` использует `GEOIP,ru,DIRECT,no-resolve`: домены не резолвятся ради
 проверки страны, чтобы все DNS-запросы не утекали к провайдеру.
@@ -109,7 +109,8 @@ cron работает как Vixie cron: если заданы и день ме�
 
 | Ключ | По умолчанию | Env | Описание |
 |------|--------------|-----|----------|
-| `machine_id` | генерируется в `<data>/machine-id` | `MIHOMYAK_MACHINE_ID` | зерно HWID (как `/etc/machine-id`) |
+| `seed` | — | `MIHOMYAK_DEVICE_SEED` | любая секретная фраза: из неё выводится machine-id, тот же seed — то же устройство (тот же HWID) на любом сервере |
+| `machine_id` | из `seed`, иначе генерируется в `<data>/machine-id` | `MIHOMYAK_MACHINE_ID` | зерно HWID (как `/etc/machine-id`); вместе с `seed` задать нельзя |
 | `hwid` | по формуле клиента | `MIHOMYAK_HWID` | итоговый `x-hwid` как есть |
 | `send_headers` | `true` | — | слать `x-hwid`/`x-device-*` |
 | `os_release` | `/etc/os-release` | `MIHOMYAK_OS_RELEASE` | откуда брать дистрибутив |
@@ -146,7 +147,8 @@ cron работает как Vixie cron: если заданы и день ме�
 | `stack` | `system` | — | `system` (легче всего), `gvisor`, `mixed` |
 | `auto_redirect` | `false` | — | nftables-redirect для TCP (быстрее, нужен nf_tables) |
 | `dns_listen` | `127.0.0.1:1053` | — | DNS mihomo; TUN перехватывает :53 в любом случае |
-| `kill_switch` | `false` | `MIHOMYAK_KILL_SWITCH` | блокировать трафик мимо mihomo, пока тот не работает (см. ниже) |
+| `kill_switch` | `false` (в `compose.gateway.yml` — `1`) | `MIHOMYAK_KILL_SWITCH` | блокировать трафик мимо mihomo, пока тот не работает (см. ниже) |
+| `allow_dns_leak` | `false` | `MIHOMYAK_ALLOW_DNS_LEAK` | стартовать, даже если Docker резолвит имена приложений мимо туннеля (см. [DOCKER.md](DOCKER.md)); иначе шлюз отказывается стартовать |
 
 Хосты панели (адрес подписки и редиректы) и их IP-адреса выводятся из-под туннеля:
 домены попадают в `fake-ip-filter` (с учётом `fake-ip-filter-mode`), адреса — в
@@ -204,7 +206,7 @@ dns = { nameserver = ["https://1.1.1.1/dns-query"] }
 ## Что mihomyak делает с конфигом провайдера
 
 Подписка — недоверенный вход: провайдер не должен решать, что открыто на вашем
-сервере. Порядок сборки `config.yaml` (`src/profile.rs`):
+сервере. Порядок сборки `config.yaml` (`src/mihomo/profile.rs`):
 
 1. берётся YAML подписки (для ссылок — каркас с file-провайдером, для Xray JSON —
    сконвертированные прокси);

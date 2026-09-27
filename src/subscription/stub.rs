@@ -1,7 +1,7 @@
 //! Detects provider "stub" responses: syntactically valid configs whose only
 //! purpose is to show a message ("App not supported", "Limit of devices reached",
 //! "Subscription expired", …) instead of real servers. Remnawave renders those as
-//! `vless` proxies pointing at `0.0.0.0:1` (docs/SUBSCRIPTIONS.md §2.5).
+//! `vless` proxies pointing at `0.0.0.0:1` (docs/dev/SUBSCRIPTIONS.md §2.5).
 
 use super::body::{Content, Endpoint};
 use super::headers::HwidFlags;

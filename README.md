@@ -1,165 +1,174 @@
+<div align="center">
+
 # mihomyak
 
-Лёгкий CLI/TUI-клиент на [mihomo](https://github.com/MetaCubeX/mihomo) для Linux
-(x86_64, arm64, armv7), рассчитанный на подписки, популярные в СНГ: Remnawave,
-Marzban, PasarGuard, 3x-ui. Его задача — стабильно получать подписку и держать
-прокси для домашнего сервера или VPS, в Docker или без него.
+**VPN-подписка для сервера: прокси и прозрачный шлюз для Docker-контейнеров**
 
-- **Точная имитация клиентов.** Запрос подписки совпадает побайтно с FlClashX 0.4.2,
-  Koala Clash 1.4.1 или Happ Desktop 4.3.0: User-Agent, HWID, `x-device-*`, порядок
-  и регистр заголовков. Всё выверено по исходникам и перехваченным запросам:
-  [docs/SUBSCRIPTIONS.md](docs/SUBSCRIPTIONS.md).
-- **Заглушки и битые конфиги не ломают прокси.** Ответы «App not supported»,
-  «Лимит устройств» и «Подписка истекла» (серверы `0.0.0.0:1`, заголовки `x-hwid-*`)
-  распознаются и не заменяют рабочий конфиг. Каждый новый конфиг проверяется
-  `mihomo -t`, а если ядро всё же его отвергло, возвращается предыдущий.
-- **Любой формат подписки:** mihomo YAML, base64/ссылки (`vless`, `vmess`, `trojan`,
-  `ss`, `hy2`, …), Xray JSON (конвертируется в прокси mihomo).
-- **Автообновление:** интервал (из `profile-update-interval` или свой), cron в
-  локальном времени, обновление при старте. Пропущенные запуски догоняются.
-- **Узлы по именам:** белый и чёрный списки, группы автопереключения
-  (`fallback` / `url-test` / `load-balance`) с приоритетом по маскам.
-- **Шлюз для контейнеров:** TUN с перехватом DNS. Контейнеры с
-  `network_mode: service:mihomyak` проксируются прозрачно.
-- **Лёгкость:** супервизор без async-рантайма занимает около 2–4 МБ RSS, бинарник
-  около 3 МБ (static musl). Всё остальное потребление — это сам mihomo.
-- **Безопасность по умолчанию:** подписка считается недоверенной (из неё берётся
-  только белый список ключей, провайдер не может открыть порты или туннели на вашем
-  сервере), прокси-порт только на loopback, LAN — только из частных сетей,
-  опциональный пароль, секрет API, файлы с правами `0600`, hardening в compose и
-  systemd.
+[![CI](https://github.com/sleepyhead-dev/mihomyak/actions/workflows/ci.yml/badge.svg)](https://github.com/sleepyhead-dev/mihomyak/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/sleepyhead-dev/mihomyak)](https://github.com/sleepyhead-dev/mihomyak/releases)
+[![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64%20%7C%20armv7-blue)](#установка)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-## Быстрый старт: Docker-шлюз
+Русский · [English](README.en.md)
+
+</div>
+
+mihomyak берёт вашу подписку из панели провайдера (Remnawave, Marzban, PasarGuard,
+3x-ui), представляется ей настоящим клиентом (FlClashX, Koala Clash или Happ) и держит
+запущенным ядро [mihomo](https://github.com/MetaCubeX/mihomo). Получается VPN для
+домашнего сервера, Raspberry Pi или VPS: HTTP/SOCKS-прокси для программ и прозрачный
+шлюз для Docker-контейнеров, которым не нужно ничего знать о прокси.
+
+```
+панель провайдера ──подписка──▶ mihomyak ──проверенный конфиг──▶ mihomo ──▶ VPN-узлы ──▶ интернет
+                                                                     ▲
+             ваши контейнеры (network_mode: service:mihomyak) ───────┘  весь трафик и DNS
+```
+
+## Что умеет
+
+- **Выглядит как настоящий клиент.** Запрос подписки побайтно совпадает с FlClashX,
+  Koala Clash или Happ: User-Agent, HWID, заголовки устройства, их порядок и регистр.
+  Устройство задаётся фразой-seed и переживает переустановку.
+- **Не ломает рабочий VPN.** Заглушки «Лимит устройств», «Подписка истекла», ошибки
+  панели и конфиги, которые не проходят проверку `mihomo -t`, не заменяют рабочий
+  конфиг. После перезапуска сеть поднимается сразу из кэша.
+- **Шлюз для контейнеров.** Любой контейнер в сети шлюза ходит через VPN, включая
+  DNS. Kill switch блокирует трафик, пока VPN не работает, а не пускает его напрямую.
+- **Сам обновляется.** По интервалу провайдера, по cron и при старте.
+- **Узлы по вкусу.** Фильтры по именам, группы автопереключения (`fallback`,
+  `url-test`), российские сайты напрямую (`ru-direct`, выключается).
+- **Лёгкий и безопасный.** 2–3 МБ памяти (плюс ~40 МБ у mihomo), один статический
+  бинарник. Подписка считается недоверенной: провайдер не может открыть порты на вашем
+  сервере. Контейнер работает с минимальными правами.
+- **Удобный.** Команды `status`, `select`, `test` и интерактивный `tui` в терминале.
+
+## Установка
+
+Нужны Linux и подписка — ссылка вида `https://…/sub/…` из бота или личного кабинета
+провайдера. Готовые образы и бинарники есть для `amd64`, `arm64` (Raspberry Pi 3/4/5
+с 64-битной ОС) и `armv7`.
+
+### Вариант 1. Docker-шлюз (рекомендуется)
+
+Контейнеры, подключённые к шлюзу, выходят в интернет только через VPN.
 
 ```sh
-git clone https://github.com/sleepyhead-dev/mihomyak && cd mihomyak/deploy
-cp .env.example .env && chmod 600 .env && $EDITOR .env   # MIHOMYAK_SUB_URL=…
-docker compose -f compose.gateway.yml up -d               # или up -d --build
+mkdir -p ~/mihomyak && cd ~/mihomyak
+curl -fsSLO https://raw.githubusercontent.com/sleepyhead-dev/mihomyak/main/deploy/docker/compose.gateway.yml
+curl -fsSL -o .env https://raw.githubusercontent.com/sleepyhead-dev/mihomyak/main/deploy/docker/.env.example
+chmod 600 .env
+nano .env                                   # вставьте ссылку в MIHOMYAK_SUB_URL
+docker compose -f compose.gateway.yml up -d
 docker compose -f compose.gateway.yml exec mihomyak mihomyak status
 ```
 
-Образ `ghcr.io/sleepyhead-dev/mihomyak` собирает CI (`latest` — последний релиз,
-`edge` — ветка `main`). Пока репозиторий приватный, перед `pull` нужен
-`docker login ghcr.io` с токеном `read:packages`. Либо соберите образ на месте:
-`docker compose … up -d --build`.
+Шлюз запускается сам после перезагрузки (`restart: unless-stopped`), если включён
+автозапуск Docker (`sudo systemctl enable docker`, обычно он уже включён).
 
-Любой контейнер с `network_mode: service:mihomyak` ходит в сеть через прокси, включая
-DNS. Для DNS у сервиса mihomyak должен быть явный `dns:` (он уже есть в
-`compose.gateway.yml`), иначе Docker резолвит имена приложений мимо туннеля
-([подробности](docs/DOCKER.md#сценарий-1-прозрачный-шлюз-для-контейнеров-рекомендуется)).
-Другие сценарии (явный HTTP/SOCKS-прокси, шлюз для LAN, ARM) описаны в
-[docs/DOCKER.md](docs/DOCKER.md).
+Свой контейнер подключается одной строкой в том же `compose.gateway.yml`:
 
-## Без Docker
+```yaml
+  my-app:
+    image: my/app
+    network_mode: service:mihomyak        # вся сеть приложения — через VPN
+    depends_on:
+      mihomyak: {condition: service_healthy, restart: true}
+```
 
-Готовые статические бинарники для x86_64, aarch64 и armv7 лежат в
-[релизах](https://github.com/sleepyhead-dev/mihomyak/releases) (с `SHA256SUMS`).
-Или соберите сами:
+Порты приложения публикуются на сервисе `mihomyak`. Как подключить несколько
+проектов, обновлять шлюз и что делать с DNS — в [docs/DOCKER.md](docs/DOCKER.md).
+
+### Вариант 2. Прокси для контейнеров и программ
+
+Если приложению достаточно `HTTP_PROXY`, возьмите
+[`compose.proxy.yml`](deploy/docker/compose.proxy.yml): mihomyak слушает
+`http://mihomyak:7890` (HTTP и SOCKS5) в общей Docker-сети, приложения указывают его
+в `HTTP_PROXY`/`ALL_PROXY`. Перезапуск прокси приложения не ломает.
+
+### Вариант 3. Без Docker (systemd)
 
 ```sh
-./scripts/build-static.sh aarch64-unknown-linux-musl     # или make static
-sudo install -m 755 target/aarch64-unknown-linux-musl/release/mihomyak /usr/local/bin/
-sudo mihomyak core install --dest /usr/local/bin/mihomo  # mihomo с GitHub
-sudo install -D -m 600 examples/config.toml /etc/mihomyak/config.toml  # вписать url
-sudo cp contrib/mihomyak.service /etc/systemd/system/ && sudo systemctl enable --now mihomyak
+# бинарник под свою архитектуру: x86_64, aarch64 или armv7
+curl -fsSL https://github.com/sleepyhead-dev/mihomyak/releases/latest/download/mihomyak-aarch64-unknown-linux-musl.tar.gz | tar xz
+sudo install -m 755 mihomyak-*/mihomyak /usr/local/bin/
+sudo mihomyak core install --dest /usr/local/bin/mihomo
+sudo install -D -m 600 mihomyak-*/deploy/config.example.toml /etc/mihomyak/config.toml
+sudoedit /etc/mihomyak/config.toml          # вставьте ссылку в [subscription] url
+sudo cp mihomyak-*/deploy/systemd/mihomyak.service /etc/systemd/system/
+sudo systemctl enable --now mihomyak        # запуск сейчас и после каждой перезагрузки
+mihomyak status
 ```
+
+Прокси будет на `127.0.0.1:7890`. Чтобы проксировать весь хост, включите
+`[gateway] enable = true` ([docs/CONFIG.md](docs/CONFIG.md#gateway--прозрачный-шлюз-tun)).
 
 ## Команды
 
-`mihomyak --help` показывает команды по группам с примерами,
-`mihomyak <команда> --help` — подробности.
+`mihomyak --help` показывает все команды по группам, `mihomyak <команда> --help` —
+подробности. В Docker: `docker exec mihomyak mihomyak <команда>`.
 
 | Команда | Что делает |
 |---------|------------|
-| `mihomyak run` | супервизор: держит mihomo запущенным и обновляет подписку (точка входа контейнера) |
-| `mihomyak update` | обновить подписку сейчас (сигнал работающему супервизору) |
-| `mihomyak status` | трафик, срок, следующее обновление, выбранные узлы |
-| `mihomyak proxies [группа]` | группы или узлы группы с задержками |
-| `mihomyak select <группа> <узел>` | выбрать узел (имена можно сокращать: `select remna nl`) |
-| `mihomyak test [группа]` | замер задержек |
-| `mihomyak mode [rule\|global\|direct]` | режим маршрутизации (сохраняется) |
-| `mihomyak tui` | интерактивный интерфейс |
-| `mihomyak fetch [--client happ]` | диагностика: какие заголовки ушли, что ответила панель, вердикт |
-| `mihomyak identity` | эмулируемое устройство, HWID и точные заголовки |
-| `mihomyak check` / `render` | проверить настройки и собранный из кэша конфиг через `mihomo -t` / показать итоговый конфиг mihomo |
-| `mihomyak health` | healthcheck для Docker |
-| `mihomyak core install` | скачать mihomo под текущую архитектуру (`--sha256`; с `--mirror` он обязателен) |
+| `status` | подписка, трафик, срок, следующее обновление, выбранные узлы |
+| `tui` | интерактивный экран: узлы, задержки, выбор стрелками (`docker exec -it …`) |
+| `proxies [группа]` | группы или узлы группы с задержками |
+| `select <группа> <узел>` | выбрать узел (хватит части имени: `select proxy nl`) |
+| `test [группа]` | замерить задержки |
+| `mode [rule\|global\|direct]` | режим маршрутизации |
+| `update` | обновить подписку сейчас (код выхода 1, если панель отказала) |
+| `fetch` | диагностика: что ушло в панель, что она ответила и почему |
+| `identity` | каким устройством mihomyak представляется, его HWID |
+| `check` / `render` | проверить настройки / показать итоговый конфиг mihomo |
+| `run` | сам сервис (точка входа контейнера и systemd) |
 
 ## Настройка
 
-Всё задаётся в `config.toml` ([пример со всеми ключами](examples/config.toml)) или
-переменными `MIHOMYAK_*` ([справочник](docs/CONFIG.md)). Настройки читаются при
-старте, после изменений перезапустите супервизор. Фрагмент:
+Для Docker достаточно `.env` рядом с compose-файлом. Основные переменные:
 
-```toml
-[subscription]
-url = "https://sub.example.com/…"
-client = "flclashx"
+| Переменная | Что задаёт |
+|------------|------------|
+| `MIHOMYAK_SUB_URL` | ссылка на подписку |
+| `MIHOMYAK_CLIENT` | какой клиент изображать: `flclashx` (по умолчанию), `koala`, `happ` |
+| `MIHOMYAK_DEVICE_SEED` | фраза, из которой получается устройство (HWID). Тот же seed — то же устройство на любом сервере |
+| `MIHOMYAK_UPDATE_CRON` | расписание обновления, например `0 5 * * *` (время по `TZ`) |
+| `MIHOMYAK_RULES_PRESETS` | `ru-direct` по умолчанию; пустое значение — весь трафик через VPN |
+| `MIHOMYAK_EXCLUDE` | убрать узлы по именам: `*Россия*;*Info*` |
 
-[update]
-cron = ["0 5 * * *"]     # каждый день в 05:00 по TZ
-on_start = true          # и при каждом старте контейнера
+Всё остальное (группы автопереключения, свои правила, любые ключи mihomo) задаётся в
+`config.toml`: [пример со всеми ключами](deploy/config.example.toml),
+[справочник](docs/CONFIG.md).
 
-[filter]
-exclude = ["*Россия*", "*Info*"]
+### Какого клиента изображать
 
-[[groups]]
-name = "Auto"
-type = "fallback"
-nodes = ["*🇳🇱*", "*🇩🇪*"]   # порядок = приоритет
-default = true
-
-[rules]
-presets = ["ru-direct"]
-```
-
-## Какого клиента имитировать
-
-| Клиент | Что отдаст панель | Когда выбирать |
+| Клиент | Что отдаёт панель | Когда выбирать |
 |--------|-------------------|----------------|
-| `flclashx` (по умолчанию) | mihomo YAML во всех панелях | почти всегда |
-| `koala` | YAML в Remnawave/PasarGuard, ссылки в Marzban | если провайдер пускает только Koala |
+| `flclashx` | mihomo YAML во всех панелях | почти всегда |
+| `koala` | YAML или ссылки | если провайдер пускает только Koala |
 | `happ` | ссылки или Xray JSON (конвертируется) | если провайдер пускает только Happ |
 
-Один machine-id даёт **разные HWID** у разных клиентов. Смена клиента занимает новый
-слот устройства у провайдера, поэтому выбирайте один раз. Чтобы переиспользовать уже
-зарегистрированное устройство, задайте `MIHOMYAK_MACHINE_ID` или `MIHOMYAK_HWID`.
+У каждого клиента своя формула HWID, поэтому смена клиента — это новое устройство у
+провайдера. Выберите клиента один раз.
 
-## Ограничения
+## Если что-то не так
 
-- В режиме шлюза, пока mihomo не запущен (старт, перезапуск после падения), трафик
-  контейнеров по умолчанию идёт напрямую. Чтобы в это время он блокировался,
-  включите `MIHOMYAK_KILL_SWITCH=1` (`gateway.kill_switch`), см.
-  [docs/DOCKER.md](docs/DOCKER.md).
-- TLS-отпечаток запроса (JA3/JA4) отличается от настоящих клиентов (rustls). Это
-  важно, только если панель стоит за антибот-защитой, проверяющей отпечаток.
-- Зашифрованные ссылки `happ://crypt…` не поддерживаются. Домены вроде `.рф`
-  переводятся в punycode автоматически, как в браузере.
+- `mihomyak status` и `docker logs mihomyak` — первое, что стоит посмотреть.
+- `mihomyak fetch` показывает запрос к панели, её ответ и вердикт.
+- Частые вопросы (лимит устройств, «платформа не поддерживается», DNS, контейнеры
+  без сети после перезапуска шлюза) — в [docs/FAQ.md](docs/FAQ.md).
 
-## Разработка
-
-```sh
-make check        # fmt, clippy (с TUI и без), тесты, rustdoc — как в CI
-make e2e          # собрать образ и прогнать контейнеры против мок-панели
-make static TARGET=armv7-unknown-linux-musleabihf
-```
-
-CI (GitHub Actions) на каждый PR и push в `main`: линтеры, тесты (с проверкой
-конфигов настоящим `mihomo -t`), MSRV 1.88, статические сборки под три архитектуры
-(скачиваются как артефакты), аудит зависимостей, e2e в Docker. Push в `main`
-публикует образ `:edge`. Релиз выпускается тегом `vX.Y.Z` (совпадающим с версией в
-`Cargo.toml`) или кнопкой Actions → Release → Run workflow (тег создаётся сам):
-бинарники, `SHA256SUMS`, заметки из `CHANGELOG.md` и образ `:X.Y.Z`/`:latest`.
+Известные ограничения: TLS-отпечаток запроса отличается от настоящих клиентов (важно,
+только если панель за антибот-защитой), ссылки `happ://crypt…` не поддерживаются.
 
 ## Документация
 
-- [docs/SUBSCRIPTIONS.md](docs/SUBSCRIPTIONS.md): как работают подписки, HWID,
-  заглушки, точные запросы клиентов (исследование);
-- [docs/CONFIG.md](docs/CONFIG.md): все настройки и переменные окружения;
-- [docs/DOCKER.md](docs/DOCKER.md): сценарии развёртывания, шлюз, hardening;
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): устройство кода и принятые решения.
+- [docs/DOCKER.md](docs/DOCKER.md) — Docker: шлюз, прокси, несколько проектов, обновление;
+- [docs/CONFIG.md](docs/CONFIG.md) — все настройки и переменные окружения;
+- [docs/FAQ.md](docs/FAQ.md) — частые вопросы и проблемы;
+- [docs/dev/](docs/dev/DEVELOPMENT.md) — для разработчиков: сборка, тесты, устройство
+  кода, исследование панелей и клиентов.
 
 ## Лицензия
 
-MIT. Проект начинался как форк [mihoro](https://github.com/spencerwooo/mihoro)
-и затем был переписан.
+[MIT](LICENSE). Проект вырос из форка [mihoro](https://github.com/spencerwooo/mihoro)
+и был полностью переписан.

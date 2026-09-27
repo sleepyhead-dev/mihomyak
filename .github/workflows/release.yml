@@ -85,8 +85,9 @@ jobs:
           mkdir "$name"
           install -m 755 bin/mihomyak "$name/mihomyak"
           cp README.md LICENSE CHANGELOG.md "$name/"
-          cp -r examples contrib deploy "$name/"
-          tar czf "$name.tar.gz" "$name"
+          cp -r deploy "$name/"
+          # Stable file name: releases/latest/download/mihomyak-<target>.tar.gz
+          tar czf "mihomyak-${{ matrix.target }}.tar.gz" "$name"
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.target }}
@@ -177,3 +178,36 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  # What users download must work: the archive and the image, on both
+  # architectures, fetched anonymously exactly as the README says.
+  verify:
+    name: Verify published (${{ matrix.arch }})
+    needs: [version, publish, image]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - name: Release archive
+        run: |
+          curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/mihomyak-${{ matrix.target }}.tar.gz" | tar xz
+          ./mihomyak-*/mihomyak --version | tee version.txt
+          grep -qF "mihomyak ${TAG#v}" version.txt
+      - name: Published image
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:${TAG#v}"
+          docker pull "$image"
+          ./tests/e2e/smoke.sh "$image"

@@ -78,7 +78,7 @@ docker exec mihomyak-e2e-gateway mihomyak check >/dev/null || fail "mihomyak che
 
 # On a user-defined network Docker's embedded DNS forwards host-inherited
 # upstreams from the host's namespace, past the TUN; an explicit --dns is
-# queried from the gateway's namespace and answered by mihomo (src/gateway.rs).
+# queried from the gateway's namespace and answered by mihomo (src/gateway/mod.rs).
 echo "== app DNS behind the gateway"
 docker network create mihomyak-e2e >/dev/null
 start mihomyak-e2e-dns --network mihomyak-e2e --dns 1.1.1.1 \
@@ -91,9 +91,13 @@ case "$addr" in
 esac
 docker exec mihomyak-e2e-dns mihomyak check | grep -q "host's resolver" \
   && fail "DNS warning with an explicit --dns"
-start mihomyak-e2e-nodns --network mihomyak-e2e \
-  --device /dev/net/tun --cap-add NET_ADMIN -e MIHOMYAK_GATEWAY=1
-docker exec mihomyak-e2e-nodns mihomyak check | grep -q "host's resolver" \
-  || fail "no DNS warning without --dns"
+# Without --dns the gateway refuses to start rather than leak.
+if nodns=$(docker run --rm --name mihomyak-e2e-nodns --network mihomyak-e2e \
+  --read-only --tmpfs /data --cap-drop ALL --cap-add NET_ADMIN --device /dev/net/tun \
+  -e MIHOMYAK_GATEWAY=1 -e "MIHOMYAK_SUB_URL=http://$host_ip:$port/sub/e2e-nodns" \
+  "$image" 2>&1); then
+  fail "a leaking gateway started"
+fi
+echo "$nodns" | grep -q "host's resolver" || fail "no DNS leak message: $nodns"
 
 echo "e2e OK"

@@ -1,0 +1,8 @@
+# Gateway config of the e2e stand: a fallback group checked against the target.
+[[groups]]
+name = "E2E-FALLBACK"
+type = "fallback"
+nodes = ["*-1", "*-2"]
+url = "http://203.0.113.80/generate_204"
+interval = "5s"
+default = true
