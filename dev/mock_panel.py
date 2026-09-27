@@ -14,7 +14,7 @@ exercised without a real subscription:
 
 Usage:
     python3 dev/mock_panel.py --port 8080 --device-limit 1 --proxy ss://…@host:port
-    curl -X POST 'http://127.0.0.1:8080/_control?state=expired'   # good|expired|limited
+    curl -X POST 'http://127.0.0.1:8080/_control?state=expired'   # good|expired|limited|http500|broken
     curl -X POST 'http://127.0.0.1:8080/_control?reset=1'         # forget devices
     curl 'http://127.0.0.1:8080/_log'                              # requests seen
 """
@@ -102,11 +102,15 @@ def link_to_mihomo(name, link):
         cipher, password = userinfo.split(":", 1)
         return {"name": name, "type": "ss", "server": u.hostname, "port": u.port,
                 "cipher": cipher, "password": password, "udp": True}
+    insecure = {"skip-cert-verify": True} if q.get("allowInsecure") == "1" else {}
     if u.scheme == "trojan":
         return {"name": name, "type": "trojan", "server": u.hostname, "port": u.port,
-                "password": urllib.parse.unquote(u.username or ""), "sni": q.get("sni", u.hostname)}
+                "password": urllib.parse.unquote(u.username or ""), "sni": q.get("sni", u.hostname),
+                **insecure}
     proxy = {"name": name, "type": "vless", "server": u.hostname, "port": u.port,
              "uuid": u.username, "network": q.get("type", "tcp"), "udp": True}
+    if q.get("security") == "tls":
+        proxy.update({"tls": True, "servername": q.get("sni", u.hostname), **insecure})
     if q.get("security") == "reality":
         proxy.update({"tls": True, "servername": q.get("sni"), "flow": q.get("flow", ""),
                       "client-fingerprint": q.get("fp", "chrome"),
@@ -121,6 +125,7 @@ def link_to_xray_outbound(link):
     """Remnawave XrayJsonGeneratorService shape for the links the mock serves."""
     m = link_to_mihomo("x", link)
     stream = {"network": "tcp", "tcpSettings": {}}
+    tls = {"serverName": m.get("sni") or m.get("servername"), "allowInsecure": bool(m.get("skip-cert-verify"))}
     if m["type"] == "ss":
         return {"tag": "proxy", "protocol": "shadowsocks",
                 "settings": {"servers": [{"address": m["server"], "port": m["port"],
@@ -129,11 +134,13 @@ def link_to_xray_outbound(link):
     if m["type"] == "trojan":
         return {"tag": "proxy", "protocol": "trojan",
                 "settings": {"servers": [{"address": m["server"], "port": m["port"], "password": m["password"]}]},
-                "streamSettings": {**stream, "security": "tls", "tlsSettings": {"serverName": m["sni"]}}}
+                "streamSettings": {**stream, "security": "tls", "tlsSettings": tls}}
     out = {"tag": "proxy", "protocol": "vless",
            "settings": {"vnext": [{"address": m["server"], "port": m["port"],
                                    "users": [{"id": m["uuid"], "encryption": "none", "flow": m.get("flow", "")}]}]},
            "streamSettings": {**stream, "security": "none"}}
+    if m.get("tls"):
+        out["streamSettings"].update({"security": "tls", "tlsSettings": tls})
     if "reality-opts" in m:
         out["streamSettings"].update({"security": "reality", "realitySettings": {
             "serverName": m["servername"], "publicKey": m["reality-opts"]["public-key"],
@@ -155,6 +162,10 @@ def xray_json_body(proxies, remarks=None):
             items.append({"remarks": name, "outbounds": [link_to_xray_outbound(link),
                           {"tag": "direct", "protocol": "freedom"}, {"tag": "block", "protocol": "blackhole"}]})
     return json.dumps(items, ensure_ascii=False, separators=(",", ":"))
+
+
+BROKEN_PROXY = ("Broken", "ss://" + base64.urlsafe_b64encode(b"no-such-cipher:x").decode().rstrip("=")
+                + "@198.51.100.99:8388")
 
 
 def links_body(proxies, remarks=None):
@@ -239,6 +250,12 @@ def make_handler(panel: Panel):
 
             with panel.lock:
                 state = panel.state
+            if state == "http500":
+                return self.send(500, "Internal Server Error")
+            if state == "broken" and response_type == "MIHOMO":
+                # Valid YAML with one proxy mihomo -t rejects: the working config must survive.
+                body = yaml_config(panel.proxies() + [BROKEN_PROXY])
+                return self.send(200, body, info, "text/yaml; charset=utf-8")
             if state in ("expired", "limited"):
                 return respond(REMARKS[state])
 

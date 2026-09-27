@@ -33,6 +33,7 @@ Async-рантайма нет. Супервизор почти всё время
 | `identity.rs` | machine-id, os-release (два парсера: по спецификации и «как регулярка Koala»), hostname, локаль |
 | `emulation.rs` | **точные** заголовки FlClashX / Koala / Happ, формулы HWID и UA |
 | `http.rs` | свой HTTP/1.1-клиент: заголовки как есть, rustls без ALPN, chunked, gzip/deflate/br/zstd, CONNECT-прокси, unix-сокет; все размеры ограничены, общий дедлайн запроса; IDN → punycode; метка сокета (`SO_MARK`) для kill switch |
+| `gateway.rs` | проверки окружения шлюза: встроенный DNS Docker, который пересылает запросы из пространства хоста мимо TUN |
 | `killswitch.rs` | опциональный kill switch шлюза: цепочка iptables/ip6tables, выпускающая только TUN, помеченный трафик, DNS, ответы и частные сети |
 | `subscription/mod.rs` | загрузка с редиректами, `analyze` → `Problem` (Refused/Http/Invalid/Stub) |
 | `subscription/headers.rs` | `subscription-userinfo`, `profile-*`, `announce`, `x-hwid-*`, `flclashx-newdomain` |

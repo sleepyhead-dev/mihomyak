@@ -4,6 +4,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
 
 ## [Unreleased]
 
+### Fixed
+- Gateway DNS leak on compose/user-defined networks: Docker's embedded DNS
+  forwards host-inherited upstreams from the host's network namespace, so apps
+  behind the gateway got real addresses from the host's resolver instead of
+  mihomo's fake-ip. `compose.gateway.yml` now sets `dns:` on the gateway, and
+  mihomyak warns at start and in `check` when Docker forwards past the tunnel.
+  Found on a Raspberry Pi 3B+ (Docker 29.8); covered by the Docker e2e test.
+
+### Changed
+- CI: images pack the static binaries of the build job instead of compiling
+  again in Docker (the multi-arch `edge` image no longer builds three targets);
+  the test suite also runs for aarch64 and armv7 under qemu; releases publish
+  the binaries CI built and tested; the arm64 image of every PR is an artifact.
+  `docker build .` from source still works and is checked on `main`.
+
+### Added
+- `dev/lab/`: a hands-on gateway lab for an ARM box (test clients behind the
+  gateway, a control container, mock panel and nodes).
+
 ## [0.1.0] - 2026-09-26
 
 First version of mihomyak (a rewrite of the mihoro fork).

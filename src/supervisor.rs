@@ -51,6 +51,11 @@ pub fn run(config: Config) -> Result<()> {
         .kill_switch
         .then(crate::killswitch::enable)
         .transpose()?;
+    if updater.config.gateway.enable
+        && let Some(warning) = crate::gateway::dns_warning()
+    {
+        crate::warn!("{warning}");
+    }
     Supervisor::new(updater)?.run()
 }
 

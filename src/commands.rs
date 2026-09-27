@@ -261,6 +261,11 @@ fn check(config: Config) -> Result<ExitCode> {
             (true, true) => "on (TUN, kill switch)",
         }
     );
+    if cfg.gateway.enable
+        && let Some(warning) = crate::gateway::dns_warning()
+    {
+        println!("warning:      {warning}");
+    }
     let built = match updater.render() {
         Ok(built) => built,
         Err(e) => {

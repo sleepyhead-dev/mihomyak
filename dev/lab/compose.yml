@@ -1,0 +1,148 @@
+# Hands-on lab: mihomyak as a TUN gateway for test containers (see README.md).
+#
+# Every resource is named mhk-* so the lab never touches anything else on the
+# host. Nothing is published on the host's interfaces.
+#
+#   cp dev/lab/lab.env.example ~/mihomyak-lab/lab.env && chmod 600 ~/mihomyak-lab/lab.env
+#   LAB_ENV=~/mihomyak-lab/lab.env docker compose -f dev/lab/compose.yml up -d
+#   LAB_ENV=… docker compose -f dev/lab/compose.yml --profile mock up -d   # fake panel + node
+
+name: mhk
+
+x-limits: &limits
+  mem_limit: 256m
+  pids_limit: 256
+  cpus: 1.0
+
+services:
+  mhk-gw:
+    image: ${MIHOMYAK_IMAGE:-mihomyak:ci-arm64}
+    container_name: mhk-gw
+    hostname: ${MIHOMYAK_HOSTNAME:-mhk-lab}
+    env_file: ${LAB_ENV:-./lab.env}
+    environment:
+      MIHOMYAK_GATEWAY: "1"
+      MIHOMYAK_KILL_SWITCH: ${MIHOMYAK_KILL_SWITCH:-1}
+      TZ: ${TZ:-Europe/Moscow}
+    volumes:
+      - mhk-gw-data:/data
+    # Explicit upstream: app lookups stay in this namespace (see src/gateway.rs).
+    dns: [1.1.1.1, 8.8.8.8]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    stop_grace_period: 15s
+    networks:
+      mhk-net:
+        ipv4_address: 10.203.0.2
+    <<: *limits
+
+  # Test clients: they share mhk-gw's network namespace, so all their traffic
+  # (DNS included) goes through the gateway without any proxy settings.
+  mhk-app1:
+    image: curlimages/curl:latest
+    container_name: mhk-app1
+    command: ["sleep", "infinity"]
+    network_mode: service:mhk-gw
+    depends_on: [mhk-gw]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    <<: *limits
+
+  mhk-app2:
+    image: alpine:3.22
+    container_name: mhk-app2
+    command: ["sleep", "infinity"]
+    network_mode: service:mhk-gw
+    depends_on: [mhk-gw]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    <<: *limits
+
+  # Control: same network, no gateway. Shows the host's own exit IP.
+  mhk-direct:
+    image: curlimages/curl:latest
+    container_name: mhk-direct
+    command: ["sleep", "infinity"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks:
+      mhk-net:
+        ipv4_address: 10.203.0.3
+    <<: *limits
+
+  # --profile mock: fake Remnawave panel and a shadowsocks node, so the gateway
+  # can be exercised without a real subscription (lab.env: the mock URL).
+  mhk-panel:
+    profiles: [mock]
+    image: python:3-alpine
+    container_name: mhk-panel
+    command:
+      - python3
+      - /lab/mock_panel.py
+      - --host=0.0.0.0
+      - --port=8080
+      - --device-limit=${MOCK_DEVICE_LIMIT:-2}
+      - --interval=1
+      # aes-128-gcm:lab-password
+      - --proxy=ss://YWVzLTEyOC1nY206bGFiLXBhc3N3b3Jk@10.203.0.21:8388#LAB-SS-1
+      - --proxy=ss://YWVzLTEyOC1nY206bGFiLXBhc3N3b3Jk@10.203.0.22:8388#LAB-SS-2
+    volumes:
+      - ../mock_panel.py:/lab/mock_panel.py:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks:
+      mhk-net:
+        ipv4_address: 10.203.0.10
+    <<: *limits
+
+  mhk-node1:
+    profiles: [mock]
+    image: metacubex/mihomo:v1.19.31
+    container_name: mhk-node1
+    command: ["-d", "/tmp", "-f", "/lab/node-ss.yaml"]
+    volumes:
+      - ./node-ss.yaml:/lab/node-ss.yaml:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks:
+      mhk-net:
+        ipv4_address: 10.203.0.21
+    <<: *limits
+
+  mhk-node2:
+    profiles: [mock]
+    image: metacubex/mihomo:v1.19.31
+    container_name: mhk-node2
+    command: ["-d", "/tmp", "-f", "/lab/node-ss.yaml"]
+    volumes:
+      - ./node-ss.yaml:/lab/node-ss.yaml:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks:
+      mhk-net:
+        ipv4_address: 10.203.0.22
+    <<: *limits
+
+networks:
+  mhk-net:
+    name: mhk-net
+    ipam:
+      config:
+        - subnet: 10.203.0.0/24
+
+volumes:
+  mhk-gw-data:
+    name: mhk-gw-data
