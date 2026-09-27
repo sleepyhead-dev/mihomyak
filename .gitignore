@@ -4,3 +4,6 @@
 # Local secrets and state
 .env
 /data/
+
+# Prebuilt binaries for the Docker image (Dockerfile BINARY=prebuilt)
+/dist/

@@ -30,6 +30,10 @@ const STOP_GRACE: Duration = Duration::from_secs(8);
 /// How long a freshly started core may take before its API answers.
 const API_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RESTART_BACKOFF: Duration = Duration::from_secs(60);
+/// First retry after a failed update, doubling up to [`MAX_RETRY_BACKOFF`].
+const RETRY_BACKOFF: Duration = Duration::from_secs(60);
+/// First retry after a network error while there is no usable config yet.
+const BOOT_RETRY_BACKOFF: Duration = Duration::from_secs(5);
 const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(3600);
 /// A core that ran this long is considered healthy again (backoff resets).
 const HEALTHY_UPTIME: Duration = Duration::from_secs(60);
@@ -51,6 +55,11 @@ pub fn run(config: Config) -> Result<()> {
         .kill_switch
         .then(crate::killswitch::enable)
         .transpose()?;
+    if updater.config.gateway.enable
+        && let Some(warning) = crate::gateway::dns_warning()
+    {
+        crate::warn!("{warning}");
+    }
     Supervisor::new(updater)?.run()
 }
 
@@ -65,6 +74,8 @@ struct Supervisor {
     /// Unix time of the next subscription update (`None`: only on demand).
     next_update: Option<u64>,
     update_failures: u32,
+    /// No usable subscription yet (first start without a cache).
+    bootstrapping: bool,
     restart_at: Option<Instant>,
     restart_backoff: Duration,
 }
@@ -100,6 +111,7 @@ impl Supervisor {
             deferred: VecDeque::new(),
             next_update: Some(now_unix()),
             update_failures: 0,
+            bootstrapping: false,
             restart_at: None,
             restart_backoff: Duration::from_secs(1),
         })
@@ -192,8 +204,10 @@ impl Supervisor {
             self.set_next_update(next);
             return Ok(true);
         }
+        self.bootstrapping = true;
         loop {
             if self.update() {
+                self.bootstrapping = false;
                 return Ok(true);
             }
             let wait = self.wait_time();
@@ -229,28 +243,34 @@ impl Supervisor {
                     crate::info!("provider announcement: {announce}");
                 }
                 if changed && !self.reload_core() {
-                    self.schedule_retry();
+                    self.schedule_retry(false);
                     return false;
                 }
                 true
             }
             Ok(Outcome::Kept(problem)) => {
-                crate::warn!("keeping the current config: {problem}");
-                self.schedule_retry();
+                if self.bootstrapping {
+                    crate::warn!("subscription not applied: {problem}");
+                } else {
+                    crate::warn!("keeping the current config: {problem}");
+                }
+                self.schedule_retry(false);
                 false
             }
             Err(e) => {
                 crate::warn!("subscription update failed: {e:#}");
-                self.schedule_retry();
+                // Without any config nothing runs (a gateway has no network at
+                // all), and at boot DNS or the network are often just not ready.
+                self.schedule_retry(self.bootstrapping);
                 false
             }
         }
     }
 
-    fn schedule_retry(&mut self) {
+    fn schedule_retry(&mut self, soon: bool) {
         self.update_failures += 1;
-        let backoff = Duration::from_secs(60) * 2u32.saturating_pow(self.update_failures - 1);
-        self.set_next_update(Some(now_unix() + backoff.min(MAX_RETRY_BACKOFF).as_secs()));
+        let backoff = retry_backoff(self.update_failures, soon);
+        self.set_next_update(Some(now_unix() + backoff.as_secs()));
     }
 
     fn set_next_update(&mut self, at: Option<u64>) {
@@ -432,6 +452,19 @@ fn describe_next(at: Option<u64>) -> String {
     }
 }
 
+/// Delay before retry number `failures` (from 1): doubling from 1 minute, or
+/// from 5 seconds when `soon`, up to 1 hour.
+fn retry_backoff(failures: u32, soon: bool) -> Duration {
+    let first = if soon {
+        BOOT_RETRY_BACKOFF
+    } else {
+        RETRY_BACKOFF
+    };
+    first
+        .saturating_mul(2u32.saturating_pow(failures.saturating_sub(1)))
+        .min(MAX_RETRY_BACKOFF)
+}
+
 /// As PID 1 in a container we inherit orphaned processes and must reap them.
 fn reap_orphans() {
     if std::process::id() != 1 {
@@ -444,5 +477,22 @@ fn reap_orphans() {
         if pid <= 0 {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_backoff_doubles_up_to_an_hour() {
+        let secs = |failures, soon| retry_backoff(failures, soon).as_secs();
+        assert_eq!(
+            [1, 2, 3, 7, 8].map(|n| secs(n, false)),
+            [60, 120, 240, 3600, 3600]
+        );
+        // No config yet and a network error: the first retries come sooner.
+        assert_eq!([1, 2, 3, 4, 5].map(|n| secs(n, true)), [5, 10, 20, 40, 80]);
+        assert_eq!(secs(u32::MAX, true), 3600);
     }
 }

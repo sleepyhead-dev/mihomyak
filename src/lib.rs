@@ -11,6 +11,7 @@ pub mod commands;
 pub mod config;
 pub mod core;
 pub mod emulation;
+pub mod gateway;
 pub mod http;
 pub mod identity;
 pub mod killswitch;

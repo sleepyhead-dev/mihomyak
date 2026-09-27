@@ -714,19 +714,25 @@ impl Stream {
 }
 
 impl Stream {
-    /// Socket timeouts surface as `EAGAIN`; name them.
+    /// Socket timeouts surface as `EAGAIN`; name them. The socket waits for the
+    /// shorter of the idle timeout and the request deadline: say which one ran out.
     fn timed_out(&self, e: io::Error) -> io::Error {
-        if matches!(
+        if !matches!(
             e.kind(),
             io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
         ) {
-            io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("no data from the server for {:?}", self.io_timeout),
-            )
-        } else {
-            e
+            return e;
         }
+        // Socket timeouts are truncated to microseconds: allow for an early wake-up.
+        let slack = Duration::from_millis(1);
+        let deadline = self.deadline.checked_sub(slack).unwrap_or(self.deadline);
+        if let Err(exceeded) = remaining(deadline) {
+            return exceeded;
+        }
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("no data from the server for {:?}", self.io_timeout),
+        )
     }
 }
 
@@ -1286,5 +1292,22 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(1));
         drop(stream);
         writer.join().unwrap();
+    }
+
+    #[test]
+    fn timeouts_name_what_ran_out() {
+        let read = |deadline, io_timeout| {
+            let (client, _server) = UnixStream::pair().unwrap();
+            let mut stream = Stream {
+                inner: Inner::Unix(client),
+                deadline: Instant::now() + deadline,
+                io_timeout,
+            };
+            stream.read(&mut [0; 8]).unwrap_err().to_string()
+        };
+        let short = Duration::from_millis(100);
+        let long = Duration::from_secs(5);
+        assert_eq!(read(short, long), "HTTP request deadline exceeded");
+        assert_eq!(read(long, short), "no data from the server for 100ms");
     }
 }

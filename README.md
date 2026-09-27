@@ -44,7 +44,10 @@ docker compose -f compose.gateway.yml exec mihomyak mihomyak status
 `docker compose … up -d --build`.
 
 Любой контейнер с `network_mode: service:mihomyak` ходит в сеть через прокси, включая
-DNS. Другие сценарии (явный HTTP/SOCKS-прокси, шлюз для LAN, ARM) описаны в
+DNS. Для DNS у сервиса mihomyak должен быть явный `dns:` (он уже есть в
+`compose.gateway.yml`), иначе Docker резолвит имена приложений мимо туннеля
+([подробности](docs/DOCKER.md#сценарий-1-прозрачный-шлюз-для-контейнеров-рекомендуется)).
+Другие сценарии (явный HTTP/SOCKS-прокси, шлюз для LAN, ARM) описаны в
 [docs/DOCKER.md](docs/DOCKER.md).
 
 ## Без Docker

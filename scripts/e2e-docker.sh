@@ -3,7 +3,8 @@
 #
 #   docker build -t mihomyak:local . && ./scripts/e2e-docker.sh mihomyak:local
 #
-# Runs two hardened containers (explicit proxy; TUN gateway with kill switch),
+# Runs hardened containers (explicit proxy; TUN gateway with kill switch;
+# gateways on a user-defined network with and without --dns),
 # waits until mihomo is healthy and checks that the subscription was applied.
 # Needs docker, python3 and /dev/net/tun. Used by CI.
 set -eu
@@ -17,20 +18,24 @@ host_ip=$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}')
 ss_link="ss://$(printf 'aes-128-gcm:e2e-password' | base64 | tr -d '\n=')@203.0.113.10:8388"
 log_dir=$(mktemp -d)
 
-python3 dev/mock_panel.py --host 0.0.0.0 --port "$port" --device-limit 2 \
+python3 dev/mock_panel.py --host 0.0.0.0 --port "$port" --device-limit 4\
   --proxy "$ss_link#NL-1" --proxy "$ss_link#DE-1" >"$log_dir/panel.log" 2>&1 &
 panel_pid=$!
 
+containers="mihomyak-e2e-proxy mihomyak-e2e-gateway mihomyak-e2e-dns mihomyak-e2e-nodns"
+
 cleanup() {
   kill "$panel_pid" 2>/dev/null || true
-  docker rm -f mihomyak-e2e-proxy mihomyak-e2e-gateway >/dev/null 2>&1 || true
+  # shellcheck disable=SC2086
+  docker rm -f $containers >/dev/null 2>&1 || true
+  docker network rm mihomyak-e2e >/dev/null 2>&1 || true
   rm -rf "$log_dir"
 }
 trap cleanup EXIT INT TERM
 
 fail() {
   echo "FAIL: $*" >&2
-  for name in mihomyak-e2e-proxy mihomyak-e2e-gateway; do
+  for name in $containers; do
     docker logs "$name" 2>&1 | tail -40 | sed "s/^/[$name] /" >&2 || true
   done
   sed 's/^/[panel] /' "$log_dir/panel.log" >&2
@@ -66,5 +71,25 @@ start mihomyak-e2e-gateway --device /dev/net/tun --cap-add NET_ADMIN \
 docker exec mihomyak-e2e-gateway iptables -S MIHOMYAK | grep -q REJECT \
   || fail "kill switch chain missing"
 docker exec mihomyak-e2e-gateway mihomyak check >/dev/null || fail "mihomyak check"
+
+# On a user-defined network Docker's embedded DNS forwards host-inherited
+# upstreams from the host's namespace, past the TUN; an explicit --dns is
+# queried from the gateway's namespace and answered by mihomo (src/gateway.rs).
+echo "== app DNS behind the gateway"
+docker network create mihomyak-e2e >/dev/null
+start mihomyak-e2e-dns --network mihomyak-e2e --dns 1.1.1.1 \
+  --device /dev/net/tun --cap-add NET_ADMIN -e MIHOMYAK_GATEWAY=1
+addr=$(docker run --rm --network container:mihomyak-e2e-dns alpine:3.22 \
+  nslookup -type=a example.com 2>&1 | awk '/^Address/ { last = $2 } END { print last }')
+case "$addr" in
+  198.18.*) echo "example.com -> $addr (fake-ip)" ;;
+  *) fail "app DNS bypassed mihomo: example.com -> '$addr'" ;;
+esac
+docker exec mihomyak-e2e-dns mihomyak check | grep -q "host's resolver" \
+  && fail "DNS warning with an explicit --dns"
+start mihomyak-e2e-nodns --network mihomyak-e2e \
+  --device /dev/net/tun --cap-add NET_ADMIN -e MIHOMYAK_GATEWAY=1
+docker exec mihomyak-e2e-nodns mihomyak check | grep -q "host's resolver" \
+  || fail "no DNS warning without --dns"
 
 echo "e2e OK"

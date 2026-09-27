@@ -393,11 +393,23 @@ impl Config {
     fn from_file(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("read config {}", path.display()))?;
-        warn_if_exposed(path);
         let mut config: Self =
             toml::from_str(&text).with_context(|| format!("parse config {}", path.display()))?;
+        if config.holds_secrets() {
+            warn_if_exposed(path);
+        }
         config.source = Some(path.to_path_buf());
         Ok(config)
+    }
+
+    /// Whether the file itself holds credentials or the device identity (the
+    /// URL often comes from the environment instead).
+    fn holds_secrets(&self) -> bool {
+        self.subscription.url.is_some()
+            || self.core.secret.is_some()
+            || !self.core.auth.is_empty()
+            || self.device.machine_id.is_some()
+            || self.device.hwid.is_some()
     }
 
     /// `env` is injected for testability.
@@ -624,14 +636,14 @@ impl Config {
     }
 }
 
-/// The config holds the subscription URL (a credential) and maybe proxy passwords.
+/// Called for a config that holds the subscription URL or other secrets.
 fn warn_if_exposed(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     if let Ok(meta) = std::fs::metadata(path)
         && meta.permissions().mode() & 0o077 != 0
     {
         crate::warn!(
-            "{} is readable by other users; it contains your subscription URL (chmod 600)",
+            "{} is readable by other users and holds secrets such as the subscription URL (chmod 600)",
             path.display()
         );
     }
@@ -763,6 +775,21 @@ mod tests {
         let lone_kill_switch: Config = toml::from_str("[gateway]\nkill_switch = true").unwrap();
         assert!(lone_kill_switch.validate().is_err());
         assert!(toml::from_str::<Config>("[subscription]\nclient = \"hiddify\"").is_err());
+    }
+
+    #[test]
+    fn only_files_with_secrets_need_private_permissions() {
+        let holds = |text: &str| toml::from_str::<Config>(text).unwrap().holds_secrets();
+        assert!(!holds(
+            "[filter]\nexclude = [\"*RU*\"]\n[[groups]]\nname = \"A\""
+        ));
+        assert!(holds(
+            "[subscription]\nurl = \"https://panel.example/sub/x\""
+        ));
+        assert!(holds("[core]\nauth = [\"user:pass\"]"));
+        assert!(holds(
+            "[device]\nmachine_id = \"0d0af05ee8fd4dc29275718f2ce4dff1\""
+        ));
     }
 
     #[test]

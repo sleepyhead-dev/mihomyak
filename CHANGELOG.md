@@ -4,6 +4,41 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
 
 ## [Unreleased]
 
+### Fixed
+- Gateway DNS leak on compose/user-defined networks: Docker's embedded DNS
+  forwards host-inherited upstreams from the host's network namespace, so apps
+  behind the gateway got real addresses from the host's resolver instead of
+  mihomo's fake-ip. `compose.gateway.yml` now sets `dns:` on the gateway, and
+  mihomyak warns at start and in `check` when Docker forwards past the tunnel.
+  Found on a Raspberry Pi 3B+ (Docker 29.8); covered by the Docker e2e test.
+- Apps behind a restarted gateway (`docker compose restart mihomyak`) were left
+  in the old network namespace without any network. The example app in
+  `compose.gateway.yml` now has `depends_on: … restart: true`, so Compose
+  restarts it after the gateway; documented in docs/DOCKER.md.
+
+- The permission warning for the config file ("readable by other users…") was
+  printed for any config, also one without secrets; now only when the file
+  holds the subscription URL, proxy passwords, the API secret or the device id.
+
+- A panel that trickles data until the 90 s request deadline was reported as
+  "no data from the server for 30s"; the error now names the deadline. The
+  first start with a refused subscription no longer logs "keeping the current
+  config" (there is none yet).
+
+### Changed
+- First start without a cached subscription: network errors are retried after
+  5, 10, 20, 40 s… instead of 1, 2, 4 min (nothing runs until the first
+  config, a gateway has no network at all). Panel refusals keep the slow pace.
+- CI: images pack the static binaries of the build job instead of compiling
+  again in Docker (the multi-arch `edge` image no longer builds three targets);
+  the test suite also runs for aarch64 and armv7 under qemu; releases publish
+  the binaries CI built and tested; the arm64 image of every PR is an artifact.
+  `docker build .` from source still works and is checked on `main`.
+
+### Added
+- `dev/lab/`: a hands-on gateway lab for an ARM box (test clients behind the
+  gateway, a control container, mock panel and nodes).
+
 ## [0.1.0] - 2026-09-26
 
 First version of mihomyak (a rewrite of the mihoro fork).

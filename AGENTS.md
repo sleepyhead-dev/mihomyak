@@ -45,8 +45,12 @@ python3 dev/mock_panel.py --port 8080 --device-limit 1   # fake Remnawave for e2
 ```
 
 CI (`.github/workflows/ci.yml`, on PRs and `main`) runs all of the above, including
-the Docker e2e script, uploads static binaries as artifacts and, on `main`,
-publishes `ghcr.io/sleepyhead-dev/mihomyak:edge`. `release.yml` (tags `vX.Y.Z`)
+the Docker e2e script and the test suite for aarch64/armv7 under qemu-user, uploads
+static binaries and the arm64 image (`image-arm64`, a `docker save` tarball) as
+artifacts and, on `main`, publishes `ghcr.io/sleepyhead-dev/mihomyak:edge`. Images
+in CI and releases pack the build job's binaries (`Dockerfile` `BINARY=prebuilt`,
+`dist/<arch>/mihomyak`); `docker build .` from source is checked by the
+`docker-source` job on `main` and on PRs touching the Dockerfile or dependencies. `release.yml` (tags `vX.Y.Z`)
 reuses CI, checks the tag against `Cargo.toml`, and publishes a GitHub release
 (tarballs, SHA256SUMS, notes from the CHANGELOG section) and the `X.Y.Z`/`latest`
 image. To release: move the `[Unreleased]` notes under `## [X.Y.Z] - date`, bump
@@ -66,6 +70,8 @@ See `docs/ARCHITECTURE.md` for the module map and design decisions. Quick pointe
 - Subscription understanding: `src/subscription/` (headers, body formats, stubs, Xray JSON).
 - Config generation: `src/profile.rs`. Settings schema: `src/config.rs`.
 - Supervisor loop: `src/supervisor.rs`; update pipeline: `src/updater.rs`.
+- Gateway: TUN settings in `src/profile.rs`, kill switch `src/killswitch.rs`, Docker
+  DNS check `src/gateway.rs`. Hands-on stand: `dev/lab/`.
 - Research on how panels and clients behave: `docs/SUBSCRIPTIONS.md` — read it before
   touching emulation or stub detection.
 
@@ -108,6 +114,30 @@ When FlClashX/Koala/Happ release a new version:
   (`FROM metacubex/mihomo` + `COPY mihomyak`).
 - Pushing works; early in the project it failed with 403 until GitHub access was
   fixed.
+
+## Hardware lab (owner's Raspberry Pi)
+
+The owner tests on a Raspberry Pi 3B+ (aarch64, Debian 13, 905 MB RAM, Docker 29.8,
+reachable as `ssh admin@server`). Rules they set: nothing runs on their laptop
+(edit, git, gh, ssh only); builds and tests run on GitHub Actions; the Pi only runs
+containers, all named `mhk-*`, under `~/mihomyak-lab/` — no host network changes,
+no sudo, nothing published beyond 127.0.0.1, no prune commands. The Pi boots with
+`cgroup_disable=memory`, so Docker memory limits are ignored there. Images come
+from the CI artifact `image-arm64` (`gh run download … -n image-arm64`, `scp`,
+`docker load`). The stand is `dev/lab/` (see its README).
+
+Verified there (2026-09-27, mock panel and mihomo ss nodes): gateway traffic
+through the node, fake-ip DNS (after the `dns:` fix), kill switch before the first
+config and with mihomo killed while the supervisor is frozen, clean chain removal
+on SIGTERM, start from cache on restart, fallback group failover and return,
+HTTP 500 / stub / `mihomo -t`-rejected configs keep the working config, device
+limit, cron in `TZ=Europe/Moscow`, SIGHUP update in 0.5 s, explicit proxy mode,
+Happ with Xray JSON and base64 links, the hostile panel (`dev/lab/hostile_panel.py`:
+every mode ends within the 90 s deadline), RSS ~2.5 MB supervisor / ~39 MB mihomo.
+Found and fixed there: the Docker DNS leak (`src/gateway.rs`), apps losing the
+network after a gateway restart (`depends_on … restart: true`), slow first-start
+retries. Not verified: a real subscription, `--memory` behaviour (no memory
+cgroup), bare metal/systemd, the LAN gateway (`network_mode: host`).
 
 ## Review history
 

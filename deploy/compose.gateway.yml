@@ -29,6 +29,11 @@ services:
       # - ./config.toml:/data/config.toml:ro
       # Report the host's distro instead of the image's Alpine in device headers.
       # - /etc/os-release:/etc/os-release:ro
+    # Required: without an explicit server Docker resolves the apps' names from the
+    # host's namespace, past the tunnel (DNS leak, no fake-ip). Any server works,
+    # your router included: mihomo answers while it runs, the server itself is
+    # only asked while mihomo is down (first start, restart).
+    dns: [1.1.1.1, 8.8.8.8]
     devices:
       - /dev/net/tun:/dev/net/tun
     cap_drop: [ALL]
@@ -52,6 +57,9 @@ services:
     depends_on:
       mihomyak:
         condition: service_healthy
+        # A restarted gateway gets a new network namespace; apps still in the old
+        # one have no network at all. Compose restarts them after the gateway.
+        restart: true
     restart: unless-stopped
 
 volumes:
