@@ -41,7 +41,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
   `docker build .` from source still works and is checked on `main`.
 
 ### Added
-- `dev/lab/`: a hands-on gateway lab for an ARM box (test clients behind the
+- `tests/e2e/`: a hands-on gateway lab for an ARM box (test clients behind the
   gateway, a control container, mock panel and nodes).
 
 ## [0.1.0] - 2026-09-26

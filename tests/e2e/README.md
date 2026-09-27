@@ -28,10 +28,10 @@ gunzip -c ~/mihomyak-lab/mihomyak-arm64.tar.gz | docker load   # mihomyak:ci-arm
 ## Запуск
 
 ```sh
-cp dev/lab/lab.env.example ~/mihomyak-lab/lab.env && chmod 600 ~/mihomyak-lab/lab.env
+cp tests/e2e/lab.env.example ~/mihomyak-lab/lab.env && chmod 600 ~/mihomyak-lab/lab.env
 export LAB_ENV=~/mihomyak-lab/lab.env
-docker compose -f dev/lab/compose.yml --profile mock up -d     # мок-панель и узлы
-docker compose -f dev/lab/compose.yml up -d                    # реальная подписка из lab.env
+docker compose -f tests/e2e/lab.compose.yml --profile mock up -d     # мок-панель и узлы
+docker compose -f tests/e2e/lab.compose.yml up -d                    # реальная подписка из lab.env
 ```
 
 С реальной подпиской каждый новый HWID занимает слот устройства у провайдера:
@@ -60,5 +60,5 @@ Kill switch: `docker exec mhk-gw sh -c 'kill -STOP $(pidof mihomyak); kill -9 $(
 ## Уборка
 
 ```sh
-docker compose -f dev/lab/compose.yml --profile mock down -v   # контейнеры, сеть, том mhk-gw-data
+docker compose -f tests/e2e/lab.compose.yml --profile mock down -v   # контейнеры, сеть, том mhk-gw-data
 ```

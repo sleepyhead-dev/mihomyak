@@ -33,5 +33,5 @@ static: ## static musl binary: make static TARGET=armv7-unknown-linux-musleabihf
 docker:
 	docker build -t $(IMAGE) .
 
-e2e: docker ## hardened containers against dev/mock_panel.py
-	./scripts/e2e-docker.sh $(IMAGE)
+e2e: docker ## hardened containers against tests/e2e/mock_panel.py
+	./tests/e2e/smoke.sh $(IMAGE)

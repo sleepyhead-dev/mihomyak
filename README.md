@@ -149,8 +149,7 @@ CI (GitHub Actions) на каждый PR и push в `main`: линтеры, те
 (скачиваются как артефакты), аудит зависимостей, e2e в Docker. Push в `main`
 публикует образ `:edge`. Релиз выпускается тегом `vX.Y.Z` (совпадающим с версией в
 `Cargo.toml`) или кнопкой Actions → Release → Run workflow (тег создаётся сам):
-бинарники, `SHA256SUMS`, заметки из `CHANGELOG.md` и образ `:X.Y.Z`/`:latest`. Подробности для разработчиков и AI-агентов — в
-[AGENTS.md](AGENTS.md).
+бинарники, `SHA256SUMS`, заметки из `CHANGELOG.md` и образ `:X.Y.Z`/`:latest`.
 
 ## Документация
 
@@ -158,8 +157,7 @@ CI (GitHub Actions) на каждый PR и push в `main`: линтеры, те
   заглушки, точные запросы клиентов (исследование);
 - [docs/CONFIG.md](docs/CONFIG.md): все настройки и переменные окружения;
 - [docs/DOCKER.md](docs/DOCKER.md): сценарии развёртывания, шлюз, hardening;
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): устройство кода и принятые решения;
-- [AGENTS.md](AGENTS.md): как продолжать разработку (для людей и AI-агентов).
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): устройство кода и принятые решения.
 
 ## Лицензия
 
