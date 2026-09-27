@@ -77,8 +77,12 @@ proxied=$(docker exec mhk-client curl -sS -m 10 -x http://10.203.0.3:7890 http:/
 ok "explicit proxy for a neighbour container ($proxied)"
 
 step "CLI"
-gw mihomyak status | grep -Eq '^mihomo: +v' || fail "status does not show mihomo"
-gw mihomyak proxies E2E-FALLBACK | grep -q 'E2E-2' || fail "proxies misses a node"
+# Output is captured first: with pipefail, `grep -q` closing the pipe early would
+# fail the pipeline.
+status=$(gw mihomyak status)
+grep -Eq '^mihomo: +v' <<<"$status" || fail "status does not show mihomo: $status"
+proxies=$(gw mihomyak proxies E2E-FALLBACK)
+grep -q 'E2E-2' <<<"$proxies" || fail "proxies misses a node: $proxies"
 ok "status, proxies"
 started=$(date +%s%N)
 gw mihomyak update >/dev/null || fail "update failed"
@@ -151,7 +155,8 @@ step "restart"
 compose restart mhk-gw >/dev/null 2>&1
 wait_for 60 "gateway healthy" gw mihomyak health
 wait_for 60 "client reconnected" target_is 203.0.113.21
-docker logs mhk-gw 2>&1 | grep -q "using the cached subscription" || fail "no start from cache"
+logs=$(docker logs mhk-gw 2>&1)
+grep -q "using the cached subscription" <<<"$logs" || fail "no start from cache"
 ok "the gateway starts from the cache and its client follows"
 
 step "clean stop"

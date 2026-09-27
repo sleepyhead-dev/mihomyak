@@ -464,7 +464,6 @@ fn warn_if_exposed(path: &Path) {
     }
 }
 
-
 pub fn is_mode(mode: &str) -> bool {
     matches!(mode, "rule" | "global" | "direct")
 }
