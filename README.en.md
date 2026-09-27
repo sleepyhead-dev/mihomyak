@@ -38,7 +38,7 @@ provider panel ──subscription──▶ mihomyak ──verified config──�
   of letting it through directly.
 - **Updates itself.** On the provider's interval, on a cron schedule, and at startup.
 - **Nodes to your taste.** Filters by name, auto-switching groups (`fallback`,
-  `url-test`), Russian sites go direct (`ru-direct`, can be turned off).
+  `url-test`), optionally Russian sites go direct (`ru-direct`).
 - **Light and safe.** 2–3 MB of memory (plus ~40 MB for mihomo), a single static binary.
   The subscription is treated as untrusted: the provider cannot open ports on your
   server. The container runs with minimal privileges.
@@ -135,7 +135,7 @@ For Docker, a `.env` next to the compose file is enough. Main variables:
 | `MIHOMYAK_CLIENT` | which client to impersonate: `flclashx` (default), `koala`, `happ` |
 | `MIHOMYAK_DEVICE_SEED` | the phrase the device (HWID) is derived from. Same seed — same device on any server |
 | `MIHOMYAK_UPDATE_CRON` | update schedule, e.g. `0 5 * * *` (time in `TZ`) |
-| `MIHOMYAK_RULES_PRESETS` | `ru-direct` by default; an empty value means all traffic goes through the VPN |
+| `MIHOMYAK_RULES_PRESETS` | `ru-direct`: Russian sites go direct, bypassing the VPN (by default all traffic goes through the VPN) |
 | `MIHOMYAK_EXCLUDE` | remove nodes by name: `*Россия*;*Info*` |
 
 Everything else (auto-switching groups, custom rules, any mihomo keys) is set in

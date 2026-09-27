@@ -19,17 +19,9 @@ fn mihomo() -> Option<PathBuf> {
 }
 
 fn validate(name: &str, body: &[u8], gateway: bool) {
-    let mut config = no_geodata_config();
+    let mut config = Config::default();
     config.gateway.enable = gateway;
     validate_with(name, body, &config);
-}
-
-/// The default `ru-direct` preset has GEOSITE/GEOIP rules, and `mihomo -t` would
-/// download geodata for them in every test.
-fn no_geodata_config() -> Config {
-    let mut config = Config::default();
-    config.rules.presets.clear();
-    config
 }
 
 fn validate_with(name: &str, body: &[u8], config: &Config) {
@@ -92,7 +84,7 @@ fn remnawave_mihomo_yaml_gateway() {
 
 #[test]
 fn remnawave_mihomo_yaml_gateway_kill_switch() {
-    let mut config = no_geodata_config();
+    let mut config = Config::default();
     config.gateway.enable = true;
     config.gateway.kill_switch = true;
     validate_with(
@@ -136,7 +128,6 @@ type = "url-test"
 
 [rules]
 prepend = ["DOMAIN-SUFFIX,lan,DIRECT", "DOMAIN-SUFFIX,example.org,Fastest"]
-presets = []
 "#;
 
 #[test]

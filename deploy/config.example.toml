@@ -52,7 +52,7 @@ default = true                   # selectors use this group by default
 
 [rules]
 # Built-in rule sets: "ru-direct" (Russian domains/IPs bypass the proxy).
-presets = ["ru-direct"]          # default; [] sends everything through the proxy
+# presets = ["ru-direct"]        # default: [] (everything through the proxy)
 # Your own rules, evaluated before the subscription's (default: []).
 prepend = [
     "DOMAIN-SUFFIX,lan,DIRECT",
