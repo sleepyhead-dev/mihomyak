@@ -161,9 +161,11 @@ if sudo -n true 2>/dev/null; then
   sudo kill -STOP "$host_pid"
   gw sh -c 'kill -9 "$(pidof mihomo)"'
   sleep 2
-  if gw pidof mihomo >/dev/null; then
+  # The killed core stays a zombie until the supervisor reaps it; what matters
+  # is that its TUN device is gone and no new core brought it back.
+  if gw ip link show mihomyak0 >/dev/null 2>&1; then
     sudo kill -CONT "$host_pid"
-    fail "mihomo came back while the supervisor was frozen"
+    fail "the TUN device is still up while mihomo is down"
   fi
   out=$(app curl -sS -m 5 -o /dev/null https://1.1.1.1 2>&1 || true)
   refused "$out" || { sudo kill -CONT "$host_pid"; fail "traffic while mihomo is down: '$out'"; }
