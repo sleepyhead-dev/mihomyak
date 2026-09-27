@@ -211,33 +211,8 @@ fn convert_outbound(
     set(&mut node, "udp", true);
 
     match protocol {
-        "vless" => {
-            set(
-                &mut node,
-                "uuid",
-                json_str(&user["id"]).ok_or("no vless id")?,
-            );
-            set(&mut node, "packet-encoding", "xudp");
-            if user["flow"] == "xtls-rprx-vision" {
-                set(&mut node, "flow", "xtls-rprx-vision");
-            }
-            if let Some(enc) = json_str(&user["encryption"]).filter(|e| *e != "none") {
-                set(&mut node, "encryption", enc);
-            }
-        }
-        "vmess" => {
-            set(
-                &mut node,
-                "uuid",
-                json_str(&user["id"]).ok_or("no vmess id")?,
-            );
-            set(&mut node, "alterId", user["alterId"].as_u64().unwrap_or(0));
-            set(
-                &mut node,
-                "cipher",
-                json_str(&user["security"]).unwrap_or("auto"),
-            );
-        }
+        "vless" => vless(&mut node, user)?,
+        "vmess" => vmess(&mut node, user)?,
         "trojan" => {
             set(
                 &mut node,
@@ -245,39 +220,9 @@ fn convert_outbound(
                 json_str(&server["password"]).ok_or("no trojan password")?,
             );
         }
-        "shadowsocks" => {
-            let network = stream["network"].as_str().unwrap_or("tcp");
-            if !matches!(network, "tcp" | "raw") {
-                return Err(format!(
-                    "shadowsocks over {network} is not supported by mihomo"
-                ));
-            }
-            set(
-                &mut node,
-                "cipher",
-                json_str(&server["method"]).ok_or("no ss method")?,
-            );
-            set(
-                &mut node,
-                "password",
-                json_str(&server["password"]).ok_or("no ss password")?,
-            );
-            if server["uot"].as_bool() == Some(true) {
-                set(&mut node, "udp-over-tcp", true);
-                if let Some(v) = server["UoTVersion"].as_u64() {
-                    set(&mut node, "udp-over-tcp-version", v);
-                }
-            }
-        }
+        "shadowsocks" => shadowsocks(&mut node, server, stream)?,
         "hysteria" => {
-            let auth = json_str(&stream["hysteriaSettings"]["auth"]).ok_or("no hysteria auth")?;
-            set(&mut node, "password", auth);
-            apply_hysteria_tls(&mut node, stream);
-            if stream["finalmask"].is_object() {
-                warnings.push(format!(
-                    "{name}: hysteria finalmask (obfs/port hopping) not converted"
-                ));
-            }
+            hysteria(&mut node, stream, name, warnings)?;
             return Ok(Some(node));
         }
         "socks" | "http" => {
@@ -301,6 +246,60 @@ fn convert_outbound(
         warnings.push(format!("{name}: Xray mux not converted (mihomo uses smux)"));
     }
     Ok(Some(node))
+}
+
+fn vless(node: &mut Mapping, user: &Json) -> Result<(), String> {
+    set(node, "uuid", json_str(&user["id"]).ok_or("no vless id")?);
+    set(node, "packet-encoding", "xudp");
+    if user["flow"] == "xtls-rprx-vision" {
+        set(node, "flow", "xtls-rprx-vision");
+    }
+    if let Some(enc) = json_str(&user["encryption"]).filter(|e| *e != "none") {
+        set(node, "encryption", enc);
+    }
+    Ok(())
+}
+
+fn vmess(node: &mut Mapping, user: &Json) -> Result<(), String> {
+    set(node, "uuid", json_str(&user["id"]).ok_or("no vmess id")?);
+    set(node, "alterId", user["alterId"].as_u64().unwrap_or(0));
+    set(node, "cipher", json_str(&user["security"]).unwrap_or("auto"));
+    Ok(())
+}
+
+fn shadowsocks(node: &mut Mapping, server: &Json, stream: &Json) -> Result<(), String> {
+    let network = stream["network"].as_str().unwrap_or("tcp");
+    if !matches!(network, "tcp" | "raw") {
+        return Err(format!(
+            "shadowsocks over {network} is not supported by mihomo"
+        ));
+    }
+    set(node, "cipher", json_str(&server["method"]).ok_or("no ss method")?);
+    set(node, "password", json_str(&server["password"]).ok_or("no ss password")?);
+    if server["uot"].as_bool() == Some(true) {
+        set(node, "udp-over-tcp", true);
+        if let Some(v) = server["UoTVersion"].as_u64() {
+            set(node, "udp-over-tcp-version", v);
+        }
+    }
+    Ok(())
+}
+
+fn hysteria(
+    node: &mut Mapping,
+    stream: &Json,
+    name: &str,
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
+    let auth = json_str(&stream["hysteriaSettings"]["auth"]).ok_or("no hysteria auth")?;
+    set(node, "password", auth);
+    apply_hysteria_tls(node, stream);
+    if stream["finalmask"].is_object() {
+        warnings.push(format!(
+            "{name}: hysteria finalmask (obfs/port hopping) not converted"
+        ));
+    }
+    Ok(())
 }
 
 fn fingerprint(raw: Option<&str>) -> &'static str {
