@@ -114,7 +114,11 @@ jobs:
           merge-multiple: true
       - name: Checksums and notes
         run: |
-          cd dist && sha256sum mihomyak-*.tar.gz > SHA256SUMS && cat SHA256SUMS && cd ..
+          # The installer and the files it downloads: releases/latest/download/<name>.
+          cp deploy/install.sh deploy/docker/compose.gateway.yml deploy/docker/compose.proxy.yml dist/
+          cp deploy/docker/.env.example dist/env.example
+          cd dist && sha256sum mihomyak-*.tar.gz install.sh compose.*.yml env.example > SHA256SUMS
+          cat SHA256SUMS && cd ..
           # The CHANGELOG section of this version, else the Unreleased one.
           version="${TAG#v}"
           awk -v v="$version" '
@@ -131,6 +135,10 @@ jobs:
           prerelease: ${{ contains(needs.version.outputs.tag, '-') }}
           files: |
             dist/mihomyak-*.tar.gz
+            dist/install.sh
+            dist/compose.gateway.yml
+            dist/compose.proxy.yml
+            dist/env.example
             dist/SHA256SUMS
 
   image:
@@ -211,3 +219,12 @@ jobs:
           image="ghcr.io/${GITHUB_REPOSITORY,,}:${TAG#v}"
           docker pull "$image"
           ./tests/e2e/smoke.sh "$image"
+      - name: The README one-liner (published install.sh, gateway mode)
+        run: |
+          link="ss://$(printf 'aes-128-gcm:x' | base64 | tr -d '\n=')@203.0.113.10:8388#NL-1"
+          python3 tests/e2e/mock_panel.py --host 0.0.0.0 --port 18091 --device-limit 0 --proxy "$link" &
+          host_ip=$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}')
+          installer="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/install.sh"
+          curl -fsSL "$installer" | sh -s -- --yes --mode gateway --url "http://$host_ip:18091/sub/verify"
+          mihomyak status
+          curl -fsSL "$installer" | sh -s -- uninstall --purge --yes

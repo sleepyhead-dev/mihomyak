@@ -9,9 +9,11 @@ iptables; всё состояние лежит в томе `/data`.
 | `latest`, `X.Y.Z`, `X.Y` | релизы |
 | `edge`, `sha-<commit>` | последняя сборка ветки `main` |
 
-Готовые compose-файлы: [`deploy/docker/`](../deploy/docker). Настройки задаются в `.env`
-рядом с compose-файлом ([пример](../deploy/docker/.env.example), все переменные —
-в [CONFIG.md](CONFIG.md)). Держите `.env` с правами `600`: в нём ссылка на подписку.
+Проще всего поставить установщиком из [README](../README.md#установка): он кладёт в
+`/opt/mihomyak` файл `compose.yml` (шлюз или прокси из [`deploy/docker/`](../deploy/docker)) и
+`.env` с настройками. Все команды ниже выполняются в этой папке. Переменные `.env` —
+в [CONFIG.md](CONFIG.md), [пример со всеми](../deploy/docker/.env.example). Держите `.env`
+с правами `600`: в нём ссылка на подписку.
 
 ## Шлюз для контейнеров
 
@@ -67,7 +69,7 @@ mihomo не запущен. Если `dns:` убрать, шлюз **откаж�
 
 - `depends_on: … restart: true` у приложения: compose перезапустит его сам после
   `docker compose restart mihomyak` (нужен Compose 2.17+).
-- Обновление образа:
+- Обновление образа: `mihomyak upgrade` или
   `docker compose pull && docker compose up -d` **без имени сервиса** — compose
   пересоздаст шлюз и всех, кто от него зависит. `docker compose up -d mihomyak`
   пересоздаст только шлюз.

@@ -251,10 +251,10 @@ jobs:
         run: |
           if [ "$GITHUB_EVENT_NAME" != pull_request ] \
             || git diff --name-only "origin/$GITHUB_BASE_REF...HEAD" \
-              | grep -qE '^(src/|tests/|Cargo\.(toml|lock)|Dockerfile|\.dockerignore|\.github/workflows/)'; then
+              | grep -qE '^(src/|tests/|deploy/|Cargo\.(toml|lock)|Dockerfile|\.dockerignore|\.github/workflows/)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No code, stand or image change: skipped"
+            echo "No code, stand, deployment or image change: skipped"
           fi
       - if: steps.changed.outputs.run == 'true'
         uses: actions/download-artifact@v4
@@ -266,6 +266,9 @@ jobs:
         run: docker build --build-arg BINARY=prebuilt -t mihomyak:e2e .
       - if: steps.changed.outputs.run == 'true'
         run: ./tests/e2e/gateway.sh mihomyak:e2e
+      - if: steps.changed.outputs.run == 'true'
+        name: Installer (Docker gateway, Docker proxy, systemd)
+        run: ./tests/e2e/installer.sh mihomyak:e2e dist/${{ matrix.arch }}/mihomyak
 
   # Line coverage of the test suite, reported in the job summary (informational).
   coverage:

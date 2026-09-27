@@ -46,27 +46,42 @@ mihomyak берёт вашу подписку из панели провайде
 ## Установка
 
 Нужны Linux и подписка — ссылка вида `https://…/sub/…` из бота или личного кабинета
-провайдера. Готовые образы и бинарники есть для `amd64`, `arm64` (Raspberry Pi 3/4/5
-с 64-битной ОС) и `armv7`.
-
-### Вариант 1. Docker-шлюз (рекомендуется)
-
-Контейнеры, подключённые к шлюзу, выходят в интернет только через VPN.
+провайдера. Поддерживаются `amd64`, `arm64` (Raspberry Pi 3/4/5 с 64-битной ОС) и
+`armv7`. Для режимов с Docker нужен установленный
+[Docker](https://docs.docker.com/engine/install/).
 
 ```sh
-mkdir -p ~/mihomyak && cd ~/mihomyak
-curl -fsSLO https://raw.githubusercontent.com/sleepyhead-dev/mihomyak/main/deploy/docker/compose.gateway.yml
-curl -fsSL -o .env https://raw.githubusercontent.com/sleepyhead-dev/mihomyak/main/deploy/docker/.env.example
-chmod 600 .env
-nano .env                                   # вставьте ссылку в MIHOMYAK_SUB_URL
-docker compose -f compose.gateway.yml up -d
-docker compose -f compose.gateway.yml exec mihomyak mihomyak status
+curl -fsSL https://github.com/sleepyhead-dev/mihomyak/releases/latest/download/install.sh | sh
 ```
 
-Шлюз запускается сам после перезагрузки (`restart: unless-stopped`), если включён
-автозапуск Docker (`sudo systemctl enable docker`, обычно он уже включён).
+Установщик спросит ссылку, режим и seed устройства, а остальное сделает сам:
 
-Свой контейнер подключается одной строкой в том же `compose.gateway.yml`:
+- **шлюз** (по умолчанию): контейнеры, подключённые к нему, ходят в интернет только
+  через VPN, включая DNS;
+- **прокси**: HTTP и SOCKS5 на `mihomyak:7890` для контейнеров любых compose-проектов;
+- **без Docker**: сервис systemd с прокси на `127.0.0.1:7890`.
+
+Он создаёт `/opt/mihomyak` с настройками (`.env`, права `600`), запускает mihomyak,
+ждёт, пока тот заработает, включает автозапуск после перезагрузки и ставит команду
+`mihomyak` (`mihomyak status`, `mihomyak tui`, `mihomyak logs`, `mihomyak upgrade`).
+В конце он покажет, как подключить свой контейнер.
+
+Seed — любое слово или фраза (например, `apple`), из которой получается устройство:
+тот же seed — то же устройство у провайдера на любом сервере. Enter — случайный seed.
+
+Без вопросов, например для скриптов:
+
+```sh
+curl -fsSL https://github.com/sleepyhead-dev/mihomyak/releases/latest/download/install.sh \
+  | sh -s -- --yes --url 'https://…/sub/…' --mode gateway --seed apple
+```
+
+Обновить: `mihomyak upgrade`. Удалить: `mihomyak uninstall`.
+
+### Подключить свой контейнер к шлюзу
+
+Добавьте сервис в `/opt/mihomyak/compose.yml` и выполните `docker compose up -d` в этой
+папке:
 
 ```yaml
   my-app:
@@ -74,39 +89,46 @@ docker compose -f compose.gateway.yml exec mihomyak mihomyak status
     network_mode: service:mihomyak        # вся сеть приложения — через VPN
     depends_on:
       mihomyak: {condition: service_healthy, restart: true}
+    restart: unless-stopped
 ```
 
-Порты приложения публикуются на сервисе `mihomyak`. Как подключить несколько
-проектов, обновлять шлюз и что делать с DNS — в [docs/DOCKER.md](docs/DOCKER.md).
+Порты приложения публикуются на сервисе `mihomyak`. Как подключить проекты из других
+папок и что выбрать для нескольких проектов — в [docs/DOCKER.md](docs/DOCKER.md).
 
-### Вариант 2. Прокси для контейнеров и программ
+<details>
+<summary>Установка вручную</summary>
 
-Если приложению достаточно `HTTP_PROXY`, возьмите
-[`compose.proxy.yml`](deploy/docker/compose.proxy.yml): mihomyak слушает
-`http://mihomyak:7890` (HTTP и SOCKS5) в общей Docker-сети, приложения указывают его
-в `HTTP_PROXY`/`ALL_PROXY`. Перезапуск прокси приложения не ломает.
-
-### Вариант 3. Без Docker (systemd)
+Docker-шлюз (для прокси — `compose.proxy.yml`):
 
 ```sh
-# бинарник под свою архитектуру: x86_64, aarch64 или armv7
+sudo mkdir -p /opt/mihomyak && sudo chown "$USER" /opt/mihomyak && cd /opt/mihomyak
+curl -fsSL -o compose.yml https://github.com/sleepyhead-dev/mihomyak/releases/latest/download/compose.gateway.yml
+curl -fsSL -o .env https://github.com/sleepyhead-dev/mihomyak/releases/latest/download/env.example
+chmod 600 .env && nano .env                 # ссылка в MIHOMYAK_SUB_URL, seed
+docker compose up -d
+docker compose exec mihomyak mihomyak status
+```
+
+Без Docker (бинарник под свою архитектуру: `x86_64`, `aarch64`, `armv7`):
+
+```sh
 curl -fsSL https://github.com/sleepyhead-dev/mihomyak/releases/latest/download/mihomyak-aarch64-unknown-linux-musl.tar.gz | tar xz
 sudo install -m 755 mihomyak-*/mihomyak /usr/local/bin/
 sudo mihomyak core install --dest /usr/local/bin/mihomo
 sudo install -D -m 600 mihomyak-*/deploy/config.example.toml /etc/mihomyak/config.toml
-sudoedit /etc/mihomyak/config.toml          # вставьте ссылку в [subscription] url
+sudoedit /etc/mihomyak/config.toml          # ссылка в [subscription] url
 sudo cp mihomyak-*/deploy/systemd/mihomyak.service /etc/systemd/system/
-sudo systemctl enable --now mihomyak        # запуск сейчас и после каждой перезагрузки
-mihomyak status
+sudo systemctl enable --now mihomyak
 ```
 
-Прокси будет на `127.0.0.1:7890`. Чтобы проксировать весь хост, включите
-`[gateway] enable = true` ([docs/CONFIG.md](docs/CONFIG.md#gateway--прозрачный-шлюз-tun)).
+</details>
 
 ## Команды
 
 `mihomyak --help` показывает все команды по группам, `mihomyak <команда> --help` —
-подробности. В Docker: `docker exec mihomyak mihomyak <команда>`.
+подробности. Команду `mihomyak` на хосте ставит установщик; без неё в Docker —
+`docker exec mihomyak mihomyak <команда>`. Ещё две команды есть только на хосте:
+`mihomyak logs` и `mihomyak upgrade` (обновить образ).
 
 | Команда | Что делает |
 |---------|------------|
@@ -124,7 +146,8 @@ mihomyak status
 
 ## Настройка
 
-Для Docker достаточно `.env` рядом с compose-файлом. Основные переменные:
+Настройки Docker-установки — в `/opt/mihomyak/.env`; после правки выполните
+`docker compose up -d` в этой папке. Основные переменные:
 
 | Переменная | Что задаёт |
 |------------|------------|

@@ -29,6 +29,7 @@ make e2e          # собрать образ и прогнать Docker smoke-�
 | `tests/mihomo_validate.rs` | конфиги проходят `mihomo -t` |
 | `tests/e2e/smoke.sh` | образ: hardened-контейнеры, прокси, шлюз, отказ без `dns:` |
 | `tests/e2e/gateway.sh` | стенд шлюза: мок-панель, два ss-узла, «сайт» за ними; сценарии — в [ARCHITECTURE.md](ARCHITECTURE.md#тесты) |
+| `tests/e2e/installer.sh` | `deploy/install.sh` как у пользователя: Docker-шлюз, Docker-прокси и systemd — установка, `status`, обновление, удаление без следов (нужны systemd и sudo, как на раннере CI) |
 
 Стенд `gateway.sh` создаёт только ресурсы `mhk-*` и удаляет их за собой, поэтому его
 можно запускать и на своём сервере (например, Raspberry Pi) с готовым образом.
