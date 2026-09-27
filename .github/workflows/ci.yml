@@ -225,3 +225,70 @@ jobs:
           cache-to: type=gha,scope=source-amd64,mode=max
       - if: steps.changed.outputs.run == 'true'
         run: docker run --rm mihomyak:source --version
+
+  # The TUN gateway against a fake panel, nodes and target (tests/e2e/gateway.sh),
+  # natively on amd64 and arm64. On pull requests only when code, the stand, the
+  # image or CI change; always on main, in releases and on a manual run.
+  gateway-e2e:
+    name: Gateway e2e (${{ matrix.arch }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: changed
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] \
+            || git diff --name-only "origin/$GITHUB_BASE_REF...HEAD" \
+              | grep -qE '^(src/|tests/|Cargo\.(toml|lock)|Dockerfile|\.dockerignore|\.github/workflows/)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No code, stand or image change: skipped"
+          fi
+      - if: steps.changed.outputs.run == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: mihomyak-${{ matrix.target }}
+          path: dist/${{ matrix.arch }}
+      - if: steps.changed.outputs.run == 'true'
+        name: Build the image from the tested binary
+        run: docker build --build-arg BINARY=prebuilt -t mihomyak:e2e .
+      - if: steps.changed.outputs.run == 'true'
+        run: ./tests/e2e/gateway.sh mihomyak:e2e
+
+  # Line coverage of the test suite, reported in the job summary (informational).
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Measure
+        run: |
+          cargo llvm-cov --locked --summary-only | tee coverage.txt
+          {
+            echo '### Test coverage'
+            echo '```'
+            cat coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
