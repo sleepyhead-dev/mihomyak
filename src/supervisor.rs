@@ -249,7 +249,11 @@ impl Supervisor {
                 true
             }
             Ok(Outcome::Kept(problem)) => {
-                crate::warn!("keeping the current config: {problem}");
+                if self.bootstrapping {
+                    crate::warn!("subscription not applied: {problem}");
+                } else {
+                    crate::warn!("keeping the current config: {problem}");
+                }
                 self.schedule_retry(false);
                 false
             }

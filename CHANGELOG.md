@@ -20,6 +20,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
   printed for any config, also one without secrets; now only when the file
   holds the subscription URL, proxy passwords, the API secret or the device id.
 
+- A panel that trickles data until the 90 s request deadline was reported as
+  "no data from the server for 30s"; the error now names the deadline. The
+  first start with a refused subscription no longer logs "keeping the current
+  config" (there is none yet).
+
 ### Changed
 - First start without a cached subscription: network errors are retried after
   5, 10, 20, 40 s… instead of 1, 2, 4 min (nothing runs until the first
