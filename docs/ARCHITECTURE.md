@@ -105,7 +105,7 @@ mihomo/                 home mihomo: config.yaml (+ .prev), providers/, cache.db
 | unit | `src/**` (`#[cfg(test)]`) | парсеры, формулы, сборка конфига, cron, фильтры |
 | golden | `tests/golden_requests.rs` + `tests/fixtures/requests/` | байты запроса совпадают с перехваченными у настоящих клиентов |
 | mihomo | `tests/mihomo_validate.rs` | сгенерированные конфиги проходят `mihomo -t` (нужен `MIHOMYAK_TEST_MIHOMO`) |
-| e2e вручную | `dev/mock_panel.py` | мок Remnawave: правила по UA, HWID-лимит, заглушки, Xray JSON |
+| e2e вручную | `tests/e2e/mock_panel.py` | мок Remnawave: правила по UA, HWID-лимит, заглушки, Xray JSON |
 
 Сквозной сценарий, проверенный при разработке: мок-панель, второй mihomo как
 shadowsocks-сервер, mihomyak (на хосте и в Docker-шлюзе с TUN), трафик клиента

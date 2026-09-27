@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
-# End-to-end smoke test of a mihomyak image against the fake panel in dev/.
+# End-to-end smoke test of a mihomyak image against the fake panel in tests/e2e/.
 #
-#   docker build -t mihomyak:local . && ./scripts/e2e-docker.sh mihomyak:local
+#   docker build -t mihomyak:local . && ./tests/e2e/smoke.sh mihomyak:local
 #
 # Runs hardened containers (explicit proxy; TUN gateway with kill switch;
 # gateways on a user-defined network with and without --dns),
@@ -11,14 +11,14 @@ set -eu
 
 image="${1:?usage: $0 <image>}"
 port="${MIHOMYAK_E2E_PORT:-18080}"
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 # Containers reach the host through the default bridge's gateway address.
 host_ip=$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}')
 ss_link="ss://$(printf 'aes-128-gcm:e2e-password' | base64 | tr -d '\n=')@203.0.113.10:8388"
 log_dir=$(mktemp -d)
 
-python3 dev/mock_panel.py --host 0.0.0.0 --port "$port" --device-limit 4\
+python3 tests/e2e/mock_panel.py --host 0.0.0.0 --port "$port" --device-limit 4\
   --proxy "$ss_link#NL-1" --proxy "$ss_link#DE-1" >"$log_dir/panel.log" 2>&1 &
 panel_pid=$!
 

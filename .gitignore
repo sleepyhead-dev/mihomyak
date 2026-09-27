@@ -1,9 +1,27 @@
-/target/
-**/*.rs.bk
+# Everything is ignored by default; what belongs to the project is listed below.
+/*
+!/.github/
+!/.gitignore
+!/.gitattributes
+!/.dockerignore
+!/Cargo.toml
+!/Cargo.lock
+!/CHANGELOG.md
+!/Dockerfile
+!/LICENSE
+!/Makefile
+!/README.md
+!/README.en.md
+!/deny.toml
+!/rustfmt.toml
+!/contrib/
+!/deploy/
+!/docs/
+!/examples/
+!/scripts/
+!/src/
+!/tests/
 
-# Local secrets and state
+# Never tracked, even inside the directories above.
 .env
-/data/
-
-# Prebuilt binaries for the Docker image (Dockerfile BINARY=prebuilt)
-/dist/
+*.rs.bk

@@ -13,7 +13,7 @@ exercised without a real subscription:
 * control endpoints to flip states while a client is running.
 
 Usage:
-    python3 dev/mock_panel.py --port 8080 --device-limit 1 --proxy ss://…@host:port
+    python3 tests/e2e/mock_panel.py --port 8080 --device-limit 1 --proxy ss://…@host:port
     curl -X POST 'http://127.0.0.1:8080/_control?state=expired'   # good|expired|limited|http500|broken
     curl -X POST 'http://127.0.0.1:8080/_control?reset=1'         # forget devices
     curl 'http://127.0.0.1:8080/_log'                              # requests seen

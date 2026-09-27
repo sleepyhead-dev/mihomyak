@@ -3,9 +3,9 @@
 # Every resource is named mhk-* so the lab never touches anything else on the
 # host. Nothing is published on the host's interfaces.
 #
-#   cp dev/lab/lab.env.example ~/mihomyak-lab/lab.env && chmod 600 ~/mihomyak-lab/lab.env
-#   LAB_ENV=~/mihomyak-lab/lab.env docker compose -f dev/lab/compose.yml up -d
-#   LAB_ENV=… docker compose -f dev/lab/compose.yml --profile mock up -d   # fake panel + node
+#   cp tests/e2e/lab.env.example ~/mihomyak-lab/lab.env && chmod 600 ~/mihomyak-lab/lab.env
+#   LAB_ENV=~/mihomyak-lab/lab.env docker compose -f tests/e2e/lab.compose.yml up -d
+#   LAB_ENV=… docker compose -f tests/e2e/lab.compose.yml --profile mock up -d   # fake panel + node
 
 name: mhk
 
@@ -98,7 +98,7 @@ services:
       - --proxy=ss://YWVzLTEyOC1nY206bGFiLXBhc3N3b3Jk@10.203.0.21:8388#LAB-SS-1
       - --proxy=ss://YWVzLTEyOC1nY206bGFiLXBhc3N3b3Jk@10.203.0.22:8388#LAB-SS-2
     volumes:
-      - ../mock_panel.py:/lab/mock_panel.py:ro
+      - ./mock_panel.py:/lab/mock_panel.py:ro
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]

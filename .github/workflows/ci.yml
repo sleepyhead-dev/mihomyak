@@ -145,7 +145,7 @@ jobs:
           load: true
           tags: mihomyak:ci
       - name: End-to-end test (mock panel, proxy and TUN gateway with kill switch)
-        run: ./scripts/e2e-docker.sh mihomyak:ci
+        run: ./tests/e2e/smoke.sh mihomyak:ci
       # For hands-on tests on an ARM box without registry credentials:
       #   gunzip -c mihomyak-arm64.tar.gz | docker load   (tag mihomyak:ci-arm64)
       - name: Export the arm64 image
