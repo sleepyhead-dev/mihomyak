@@ -27,7 +27,11 @@ pub(super) fn core_cmd(config: &Config, cmd: CoreCommand) -> Result<ExitCode> {
         }
         CoreCommand::Version => {
             let bin = crate::mihomo::core::resolve_bin(config, &store);
-            println!("{} ({})", crate::mihomo::core::version(&bin)?, bin.display());
+            println!(
+                "{} ({})",
+                crate::mihomo::core::version(&bin)?,
+                bin.display()
+            );
         }
     }
     Ok(ExitCode::SUCCESS)

@@ -8,9 +8,9 @@ use std::process::ExitCode;
 
 use anyhow::{Result, bail};
 
-use crate::mihomo::api::Api;
 use crate::cli::{Cli, Command};
 use crate::config::Config;
+use crate::mihomo::api::Api;
 use crate::subscription::ProviderInfo;
 use crate::util::{fmt_bytes, fmt_date, fmt_duration, now_unix, sanitize};
 

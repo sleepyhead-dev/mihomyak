@@ -5,10 +5,10 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
 
-use mihomyak::config::Config;
 use mihomyak::client::emulation::{ClientKind, Emulation};
 use mihomyak::client::http::{Client, Url};
 use mihomyak::client::identity::{Identity, OsRelease};
+use mihomyak::config::Config;
 
 const UBUNTU_OS_RELEASE: &str = r#"PRETTY_NAME="Ubuntu 24.04.3 LTS"
 NAME="Ubuntu"

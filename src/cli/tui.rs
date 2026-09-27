@@ -16,8 +16,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
-use crate::mihomo::api::{Api, DELAY_TIMEOUT_MS, Snapshot};
 use crate::config::Config;
+use crate::mihomo::api::{Api, DELAY_TIMEOUT_MS, Snapshot};
 use crate::service::store::Store;
 use crate::subscription::ProviderInfo;
 use crate::util::{fmt_bytes, fmt_date, now_unix, sanitize};

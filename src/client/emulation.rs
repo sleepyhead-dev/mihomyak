@@ -7,9 +7,9 @@
 use anyhow::{Result, bail};
 use serde::Deserialize;
 
-use crate::config::Config;
 use crate::client::http::Url;
 use crate::client::identity::Identity;
+use crate::config::Config;
 use crate::util::sha256_hex;
 
 /// FlClashX release tag the defaults emulate (`FlClash X/v<this>`).

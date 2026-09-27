@@ -7,8 +7,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use crate::config::Config;
 use crate::client::http::{Client, Endpoint, Request, Response};
+use crate::config::Config;
 use crate::util::encode_path_segment;
 
 /// Timeout for a single delay test, shared by the CLI and the TUI.

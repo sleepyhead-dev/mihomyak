@@ -18,8 +18,8 @@ use anyhow::{Context, Result, bail};
 use signal_hook::consts::{SIGCHLD, SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
-use crate::mihomo::api::{Api, Rejected};
 use crate::config::Config;
+use crate::mihomo::api::{Api, Rejected};
 use crate::mihomo::core::{self, CoreProcess};
 use crate::service::updater::{self, Outcome, Updater};
 use crate::util::now_unix;

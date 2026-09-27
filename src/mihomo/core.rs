@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-use crate::config::Config;
 use crate::client::http::{Client, Endpoint, Request, Scheme, Url};
+use crate::config::Config;
 use crate::service::store::Store;
 
 pub struct CoreProcess {

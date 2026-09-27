@@ -3,6 +3,9 @@
 //! Precedence (lowest to highest): built-in defaults → TOML file → `MIHOMYAK_*`
 //! environment variables. Docker deployments usually need nothing but env vars.
 
+mod env;
+mod validate;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -441,237 +444,6 @@ impl Config {
             || self.device.hwid.is_some()
     }
 
-    /// `env` is injected for testability.
-    fn apply_env(&mut self, env: &dyn Fn(&str) -> Option<String>) -> Result<()> {
-        let flag = |key: &str| -> Result<Option<bool>> {
-            env(key)
-                .map(|v| match v.to_ascii_lowercase().as_str() {
-                    "1" | "true" | "yes" | "on" => Ok(true),
-                    "0" | "false" | "no" | "off" | "" => Ok(false),
-                    _ => bail!("{key}: expected a boolean, got {v:?}"),
-                })
-                .transpose()
-        };
-        let sub = &mut self.subscription;
-        if let Some(v) = env("MIHOMYAK_SUB_URL") {
-            sub.url = Some(v);
-        }
-        if let Some(v) = env("MIHOMYAK_CLIENT") {
-            sub.client = v.parse()?;
-        }
-        if let Some(v) = env("MIHOMYAK_APP_VERSION") {
-            sub.app_version = Some(v);
-        }
-        if let Some(v) = env("MIHOMYAK_USER_AGENT") {
-            sub.user_agent = Some(v);
-        }
-
-        if let Some(v) = env("MIHOMYAK_FETCH_PROXY") {
-            sub.proxy = Some(v).filter(|s| !s.is_empty());
-        }
-        if let Some(v) = flag("MIHOMYAK_ACCEPT_STUB")? {
-            sub.accept_stub = v;
-        }
-        let update = &mut self.update;
-        if let Some(v) = env("MIHOMYAK_UPDATE_INTERVAL") {
-            update.interval = v.parse().context("MIHOMYAK_UPDATE_INTERVAL")?;
-        }
-        if let Some(v) = env("MIHOMYAK_UPDATE_CRON") {
-            update.cron = split_list(&v);
-        }
-        if let Some(v) = flag("MIHOMYAK_UPDATE_ON_START")? {
-            update.on_start = v;
-        }
-        if let Some(v) = env("MIHOMYAK_RULES_PRESETS") {
-            self.rules.presets = split_list(&v)
-                .iter()
-                .map(|p| p.parse())
-                .collect::<Result<_>>()?;
-        }
-        if let Some(v) = env("MIHOMYAK_INCLUDE") {
-            self.filter.include = split_list(&v);
-        }
-        if let Some(v) = env("MIHOMYAK_EXCLUDE") {
-            self.filter.exclude = split_list(&v);
-        }
-        let dev = &mut self.device;
-        if let Some(v) = env("MIHOMYAK_MACHINE_ID") {
-            dev.machine_id = Some(v);
-        }
-        if let Some(v) = env("MIHOMYAK_DEVICE_SEED") {
-            dev.seed = Some(v);
-        }
-        if let Some(v) = env("MIHOMYAK_HWID") {
-            dev.hwid = Some(v);
-        }
-        if let Some(v) = env("MIHOMYAK_HOSTNAME") {
-            dev.hostname = Some(v);
-        }
-        if let Some(v) = env("MIHOMYAK_LOCALE") {
-            dev.locale = v;
-        }
-        if let Some(v) = env("MIHOMYAK_OS_RELEASE") {
-            dev.os_release = PathBuf::from(v);
-        }
-        let core = &mut self.core;
-        if let Some(v) = env("MIHOMYAK_CORE_BIN") {
-            core.bin = PathBuf::from(v);
-        }
-        if let Some(v) = env("MIHOMYAK_CONTROLLER") {
-            core.controller = v;
-        }
-        if let Some(v) = env("MIHOMYAK_SECRET") {
-            core.secret = Some(v);
-        }
-        if let Some(v) = flag("MIHOMYAK_ALLOW_LAN")? {
-            core.allow_lan = v;
-        }
-        if let Some(v) = env("MIHOMYAK_PROXY_AUTH") {
-            core.auth = split_list(&v);
-        }
-        if let Some(v) = env("MIHOMYAK_MIXED_PORT") {
-            core.mixed_port = v.parse().context("MIHOMYAK_MIXED_PORT")?;
-        }
-        if let Some(v) = env("MIHOMYAK_MODE") {
-            core.mode = v;
-        }
-        if let Some(v) = env("MIHOMYAK_LOG_LEVEL") {
-            core.log_level = v;
-        }
-        if let Some(v) = env("MIHOMYAK_GEODATA_DIR") {
-            core.geodata_dir = Some(PathBuf::from(v)).filter(|p| !p.as_os_str().is_empty());
-        }
-        if let Some(v) = env("MIHOMYAK_MEMORY_LIMIT") {
-            core.memory_limit = Some(v).filter(|s| !s.is_empty());
-        }
-        if let Some(v) = flag("MIHOMYAK_GATEWAY")? {
-            self.gateway.enable = v;
-        }
-        if let Some(v) = flag("MIHOMYAK_KILL_SWITCH")? {
-            self.gateway.kill_switch = v;
-        }
-        if let Some(v) = flag("MIHOMYAK_ALLOW_DNS_LEAK")? {
-            self.gateway.allow_dns_leak = v;
-        }
-        Ok(())
-    }
-
-    fn validate(&self) -> Result<()> {
-        if self.device.machine_id.is_some() && self.device.seed.is_some() {
-            bail!("set either device.machine_id or device.seed, not both");
-        }
-        if let Some(seed) = &self.device.seed
-            && seed.trim().is_empty()
-        {
-            bail!("device.seed is empty");
-        }
-        if let Some(url) = &self.subscription.url {
-            crate::client::http::Url::parse(url).context("subscription.url")?;
-        }
-        if let Some(proxy) = &self.subscription.proxy {
-            let url = crate::client::http::Url::parse(proxy).context("subscription.proxy")?;
-            if url.scheme != crate::client::http::Scheme::Http {
-                bail!("subscription.proxy must be an http:// proxy");
-            }
-        }
-        for header in &self.subscription.headers {
-            let Some((name, _)) = header.split_once(':') else {
-                bail!("subscription.headers entry {header:?} must look like \"Name: value\"");
-            };
-            let token = |b: u8| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b);
-            if name.trim().is_empty() || !name.trim().bytes().all(token) {
-                bail!("subscription.headers entry {header:?} has an invalid header name");
-            }
-        }
-        // These end up in request headers: CR/LF would inject extra headers.
-        let header_values = [
-            (
-                "subscription.headers",
-                self.subscription.headers.iter().collect::<Vec<_>>(),
-            ),
-            (
-                "subscription.user_agent",
-                self.subscription.user_agent.iter().collect(),
-            ),
-            (
-                "subscription.app_version",
-                self.subscription.app_version.iter().collect(),
-            ),
-            (
-                "subscription.app_build",
-                self.subscription.app_build.iter().collect(),
-            ),
-            (
-                "subscription.core_version",
-                self.subscription.core_version.iter().collect(),
-            ),
-            ("device.hwid", self.device.hwid.iter().collect()),
-            ("device.machine_id", self.device.machine_id.iter().collect()),
-            ("device.hostname", self.device.hostname.iter().collect()),
-            ("device.os_name", self.device.os_name.iter().collect()),
-            ("device.os_version", self.device.os_version.iter().collect()),
-            (
-                "device.os_pretty_name",
-                self.device.os_pretty_name.iter().collect(),
-            ),
-            ("device.locale", vec![&self.device.locale]),
-        ];
-        for (key, values) in header_values {
-            if values.iter().any(|v| v.chars().any(char::is_control)) {
-                bail!("{key} must not contain control characters (line breaks, tabs, …)");
-            }
-        }
-        for cron in &self.update.cron {
-            cron.parse::<crate::service::schedule::Cron>()?;
-        }
-        let mut names = std::collections::HashSet::new();
-        for group in &self.groups {
-            if group.name.trim().is_empty() || !names.insert(group.name.as_str()) {
-                bail!(
-                    "[[groups]] names must be non-empty and unique ({:?})",
-                    group.name
-                );
-            }
-            if ["DIRECT", "REJECT", "GLOBAL", "PROXY", "AUTO"].contains(&group.name.as_str()) {
-                bail!("[[groups]] name {:?} is reserved", group.name);
-            }
-        }
-        for cred in &self.core.auth {
-            match cred.split_once(':') {
-                Some((user, pass)) if !user.is_empty() && !pass.is_empty() => {}
-                _ => bail!("core.auth entries must look like \"user:password\""),
-            }
-        }
-        if let Some(host) = self.core.controller.rsplit_once(':').map(|(h, _)| h) {
-            let loopback = matches!(
-                host.trim_matches(['[', ']']),
-                "127.0.0.1" | "localhost" | "::1"
-            ) || host.starts_with("127.");
-            if !self.core.controller.starts_with("unix:") && !loopback {
-                if self.core.secret.as_deref() == Some("") {
-                    bail!(
-                        "core.controller {} is reachable from the network: an empty secret is not allowed",
-                        self.core.controller
-                    );
-                }
-                crate::warn!(
-                    "mihomo API on {} is reachable from the network; keep the secret private",
-                    self.core.controller
-                );
-            }
-        }
-        if !is_mode(&self.core.mode) {
-            bail!("core.mode must be rule, global or direct");
-        }
-        if !["system", "gvisor", "mixed"].contains(&self.gateway.stack.as_str()) {
-            bail!("gateway.stack must be system, gvisor or mixed");
-        }
-        if self.gateway.kill_switch && !self.gateway.enable {
-            bail!("gateway.kill_switch needs gateway.enable (MIHOMYAK_GATEWAY=1)");
-        }
-        Ok(())
-    }
-
     pub fn subscription_url(&self) -> Result<&str> {
         self.subscription.url.as_deref().filter(|u| !u.is_empty()).context(
             "no subscription URL: set MIHOMYAK_SUB_URL or [subscription] url in the config file",
@@ -692,15 +464,6 @@ fn warn_if_exposed(path: &Path) {
     }
 }
 
-/// Env lists are `;`-separated (node names may contain commas).
-fn split_list(value: &str) -> Vec<String> {
-    value
-        .split(';')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
 
 pub fn is_mode(mode: &str) -> bool {
     matches!(mode, "rule" | "global" | "direct")
@@ -739,7 +502,8 @@ mod tests {
 
     #[test]
     fn shipped_example_is_valid() {
-        let config: Config = toml::from_str(include_str!("../deploy/config.example.toml")).unwrap();
+        let config: Config =
+            toml::from_str(include_str!("../../deploy/config.example.toml")).unwrap();
         config.validate().unwrap();
         assert_eq!(config.groups[0].name, "Auto");
     }

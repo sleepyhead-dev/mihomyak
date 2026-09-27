@@ -6,10 +6,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 
-use crate::mihomo::api::Api;
 use crate::config::Config;
-use crate::subscription::{self, ProviderInfo};
+use crate::mihomo::api::Api;
 use crate::service::updater::{self, Outcome, Updater};
+use crate::subscription::{self, ProviderInfo};
 use crate::util::{fmt_bytes, fmt_duration, fmt_timestamp, now_unix, sanitize};
 
 pub(super) fn update(config: Config) -> Result<ExitCode> {

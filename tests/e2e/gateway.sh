@@ -77,7 +77,7 @@ proxied=$(docker exec mhk-client curl -sS -m 10 -x http://10.203.0.3:7890 http:/
 ok "explicit proxy for a neighbour container ($proxied)"
 
 step "CLI"
-gw mihomyak status | grep -q 'mihomo:       v' || fail "status does not show mihomo"
+gw mihomyak status | grep -Eq '^mihomo: +v' || fail "status does not show mihomo"
 gw mihomyak proxies E2E-FALLBACK | grep -q 'E2E-2' || fail "proxies misses a node"
 ok "status, proxies"
 started=$(date +%s%N)

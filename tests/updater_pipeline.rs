@@ -8,10 +8,10 @@ use std::path::Path;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use mihomyak::config::Config;
 use mihomyak::client::emulation::ClientKind;
-use mihomyak::subscription::Problem;
+use mihomyak::config::Config;
 use mihomyak::service::updater::{Outcome, Updater};
+use mihomyak::subscription::Problem;
 
 const GOOD_BODY: &[u8] = include_bytes!("fixtures/subscriptions/remnawave-mihomo.yaml");
 /// Remnawave-style stub: a single placeholder proxy, no real servers.

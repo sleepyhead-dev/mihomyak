@@ -13,10 +13,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-use crate::config::{Config, Interval};
 use crate::client::emulation::{ClientKind, Emulation};
 use crate::client::http::{self, Response, Scheme, Url};
 use crate::client::identity::Identity;
+use crate::config::{Config, Interval};
 use crate::mihomo::profile::{Built, Params};
 use crate::service::store::{Store, SubscriptionMeta};
 use crate::subscription::{self, Analysis, Problem, ProviderInfo};
@@ -348,7 +348,9 @@ impl Updater {
     }
 
     fn provider_path(&self) -> PathBuf {
-        self.store.mihomo_home().join(crate::mihomo::profile::PROVIDER_FILE)
+        self.store
+            .mihomo_home()
+            .join(crate::mihomo::profile::PROVIDER_FILE)
     }
 
     /// Files replaced by an update, with their `*.prev` backups.

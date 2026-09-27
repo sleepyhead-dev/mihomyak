@@ -17,10 +17,10 @@ use std::net::IpAddr;
 use anyhow::{Context, Result, bail};
 use serde_norway::{Mapping, Value};
 
-use crate::config::{Config, GroupType, Preset};
 use crate::client::emulation::ClientKind;
-use crate::util::pattern::{PatternSet, keep};
+use crate::config::{Config, GroupType, Preset};
 use crate::subscription::{Content, Format};
+use crate::util::pattern::{PatternSet, keep};
 
 /// Provider file for link subscriptions, relative to the mihomo home directory.
 pub const PROVIDER_FILE: &str = "providers/subscription.txt";
@@ -207,7 +207,11 @@ pub fn build(content: &Content, config: &Config, params: &Params<'_>) -> Result<
         // The kill switch lets out only this TUN device and marked traffic, so
         // `[mihomo]` must not rename one or unmark the other.
         set(map, "routing-mark", crate::gateway::killswitch::MARK);
-        set(child(map, "tun"), "device", crate::gateway::killswitch::TUN_DEVICE);
+        set(
+            child(map, "tun"),
+            "device",
+            crate::gateway::killswitch::TUN_DEVICE,
+        );
     }
     Ok(Built {
         config_yaml: serde_norway::to_string(&root)?,
