@@ -1,77 +1,18 @@
-//! CLI command implementations.
+//! Subscription and config related commands: update, fetch, identity,
+//! status, check and render.
 
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 use crate::api::Api;
-use crate::cli::{Cli, Command, CoreCommand};
 use crate::config::Config;
 use crate::subscription::{self, ProviderInfo};
 use crate::updater::{self, Outcome, Updater};
-use crate::util::{fmt_bytes, fmt_date, fmt_duration, fmt_timestamp, now_unix, sanitize};
+use crate::util::{fmt_bytes, fmt_duration, fmt_timestamp, now_unix, sanitize};
 
-pub fn run(cli: Cli) -> Result<ExitCode> {
-    let mut config = Config::load(cli.config.as_deref(), cli.data_dir.as_deref())?;
-    match cli.command {
-        Command::Run => crate::supervisor::run(config).map(|()| ExitCode::SUCCESS),
-        Command::Update => update(config),
-        Command::Fetch {
-            client,
-            user_agent,
-            body,
-        } => {
-            if let Some(client) = client {
-                config.subscription.client = client;
-            }
-            if user_agent.is_some() {
-                config.subscription.user_agent = user_agent;
-            }
-            fetch(config, body)
-        }
-        Command::Identity { client } => {
-            if let Some(client) = client {
-                config.subscription.client = client;
-            }
-            identity(config)
-        }
-        Command::Status => status(config),
-        Command::Proxies { group } => proxies(&config, group.as_deref()),
-        Command::Select { group, proxy } => select(&config, &group, &proxy),
-        Command::Test {
-            group,
-            url,
-            timeout,
-        } => test(&config, group.as_deref(), &url, timeout),
-        Command::Mode { mode } => mode_cmd(&config, mode.as_deref()),
-        #[cfg(feature = "tui")]
-        Command::Tui => crate::tui::run(&config).map(|()| ExitCode::SUCCESS),
-        Command::Render => {
-            let built = Updater::new(config)?.render()?;
-            print!("{}", built.config_yaml);
-            for warning in &built.warnings {
-                eprintln!("warning: {warning}");
-            }
-            Ok(ExitCode::SUCCESS)
-        }
-        Command::Check => check(config),
-        Command::Health => Ok(match api(&config).and_then(|a| a.version()) {
-            Ok(_) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("unhealthy: {e:#}");
-                ExitCode::FAILURE
-            }
-        }),
-        Command::Core(cmd) => core_cmd(&config, cmd),
-    }
-}
-
-fn api(config: &Config) -> Result<Api> {
-    Api::from_config(config)
-}
-
-fn update(config: Config) -> Result<ExitCode> {
+pub(super) fn update(config: Config) -> Result<ExitCode> {
     let updater = Updater::new(config)?;
     let before = updater.store.load_meta().map_or(0, |m| m.update_seq);
     if let Some(pid) = updater.store.signal_supervisor(libc::SIGHUP)? {
@@ -131,7 +72,7 @@ fn update(config: Config) -> Result<ExitCode> {
     }
 }
 
-fn fetch(config: Config, show_body: bool) -> Result<ExitCode> {
+pub(super) fn fetch(config: Config, show_body: bool) -> Result<ExitCode> {
     let updater = Updater::new(config)?;
     let url = updater.url()?;
     println!(
@@ -160,7 +101,7 @@ fn fetch(config: Config, show_body: bool) -> Result<ExitCode> {
     println!("< ({} bytes)", response.body.len());
 
     println!();
-    print_provider(&analysis.info);
+    super::print_provider(&analysis.info);
     if let Some(content) = &analysis.content {
         println!(
             "format:       {} ({} proxies)",
@@ -206,7 +147,7 @@ fn fetch(config: Config, show_body: bool) -> Result<ExitCode> {
     })
 }
 
-fn check(config: Config) -> Result<ExitCode> {
+pub(super) fn check(config: Config) -> Result<ExitCode> {
     println!(
         "config:       {}",
         config
@@ -296,57 +237,7 @@ fn check(config: Config) -> Result<ExitCode> {
     }
 }
 
-fn print_provider(info: &ProviderInfo) {
-    let row = |label: &str, value: &str| println!("{label:<13} {}", sanitize(value));
-    if let Some(title) = &info.title {
-        row("title:", title);
-    }
-    if let Some(u) = &info.usage {
-        row(
-            "traffic:",
-            &format!("{} of {}", fmt_bytes(u.used()), u.total_display()),
-        );
-        if u.expire > 0 {
-            row(
-                "expires:",
-                &format!(
-                    "{} ({} days left)",
-                    fmt_date(u.expire),
-                    u.days_left(now_unix())
-                ),
-            );
-        } else {
-            row("expires:", "never");
-        }
-    }
-    if let Some(d) = info.refill_date {
-        row("traffic reset:", &fmt_date(d));
-    }
-    if let Some(i) = info.update_interval {
-        row("interval:", &fmt_duration(i));
-    }
-    if let Some(s) = &info.support_url {
-        row("support:", s);
-    }
-    if let Some(s) = &info.web_page_url {
-        row("web page:", s);
-    }
-    if let Some(a) = &info.announce {
-        row("announce:", a);
-    }
-    let h = info.hwid;
-    if h.active || h.not_supported || h.max_devices_reached || h.limit {
-        row(
-            "hwid:",
-            &format!(
-                "active={} not-supported={} max-devices-reached={} limit={}",
-                h.active, h.not_supported, h.max_devices_reached, h.limit
-            ),
-        );
-    }
-}
-
-fn identity(config: Config) -> Result<ExitCode> {
+pub(super) fn identity(config: Config) -> Result<ExitCode> {
     let updater = Updater::new(config)?;
     let e = &updater.emulation;
     let d = e.device_headers();
@@ -370,13 +261,13 @@ fn identity(config: Config) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn status(config: Config) -> Result<ExitCode> {
+pub(super) fn status(config: Config) -> Result<ExitCode> {
     let store = crate::store::Store::open(&config.data_dir)?;
     match store.load_meta() {
         Some(meta) => {
             let info = ProviderInfo::from_headers(&meta.headers);
             println!("subscription");
-            print_provider(&info);
+            super::print_provider(&info);
             if meta.fetched_at > 0 {
                 println!(
                     "{:<13} {} ({} proxies)",
@@ -419,7 +310,7 @@ fn status(config: Config) -> Result<ExitCode> {
         Some(pid) => println!("supervisor:   running (pid {pid})"),
         None => println!("supervisor:   not running"),
     }
-    let api = api(&config)?;
+    let api = super::api(&config)?;
     match api.version() {
         Ok(version) => {
             println!("mihomo:       {version}");
@@ -448,185 +339,11 @@ fn status(config: Config) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// Exact, then case-insensitive, then unique substring match.
-fn resolve_name<'a>(
-    candidates: impl IntoIterator<Item = &'a String>,
-    query: &str,
-) -> Result<String> {
-    let all: Vec<&String> = candidates.into_iter().collect();
-    if let Some(exact) = all.iter().find(|c| c.as_str() == query) {
-        return Ok((*exact).clone());
-    }
-    let q = query.to_lowercase();
-    if let Some(ci) = all.iter().find(|c| c.to_lowercase() == q) {
-        return Ok((*ci).clone());
-    }
-    let matches: Vec<&&String> = all
-        .iter()
-        .filter(|c| c.to_lowercase().contains(&q))
-        .collect();
-    match matches.as_slice() {
-        [one] => Ok((**one).clone()),
-        [] => bail!("no match for {query:?}"),
-        many => bail!(
-            "{query:?} is ambiguous: {}",
-            many.iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    }
-}
-
-fn fmt_delay(delay: Option<&u32>) -> String {
-    match delay {
-        Some(&d) if d > 0 => format!("{d} ms"),
-        Some(_) => "timeout".into(),
-        None => "-".into(),
-    }
-}
-
-fn proxies(config: &Config, group: Option<&str>) -> Result<ExitCode> {
-    let snapshot = api(config)?.snapshot()?;
-    let Some(query) = group else {
-        for g in &snapshot.groups {
-            println!(
-                "{:<24} {:<11} → {} ({} members)",
-                sanitize(&g.name),
-                g.kind,
-                sanitize(g.now.as_deref().unwrap_or("-")),
-                g.members.len()
-            );
-        }
-        return Ok(ExitCode::SUCCESS);
-    };
-    let name = resolve_name(snapshot.groups.iter().map(|g| &g.name), query)?;
-    let g = snapshot
-        .groups
-        .iter()
-        .find(|g| g.name == name)
-        .context("group vanished")?;
-    println!("{} [{}]", sanitize(&g.name), g.kind);
-    for member in &g.members {
-        let mark = if g.now.as_deref() == Some(member) {
-            "*"
-        } else {
-            " "
-        };
-        let kind = snapshot.kinds.get(member).map_or("", String::as_str);
-        println!(
-            " {mark} {:<32} {kind:<11} {}",
-            sanitize(member),
-            fmt_delay(snapshot.delays.get(member))
-        );
+pub(super) fn render(config: Config) -> Result<ExitCode> {
+    let built = Updater::new(config)?.render()?;
+    print!("{}", built.config_yaml);
+    for warning in &built.warnings {
+        eprintln!("warning: {warning}");
     }
     Ok(ExitCode::SUCCESS)
-}
-
-fn select(config: &Config, group: &str, proxy: &str) -> Result<ExitCode> {
-    let api = api(config)?;
-    let snapshot = api.snapshot()?;
-    let group = resolve_name(snapshot.groups.iter().map(|g| &g.name), group)?;
-    let g = snapshot
-        .groups
-        .iter()
-        .find(|g| g.name == group)
-        .context("group vanished")?;
-    if !g.selectable() {
-        bail!(
-            "{group} is a {} group; only Selector groups accept a choice",
-            g.kind
-        );
-    }
-    let proxy = resolve_name(g.members.iter(), proxy)?;
-    api.select(&group, &proxy)?;
-    println!("{} → {}", sanitize(&group), sanitize(&proxy));
-    Ok(ExitCode::SUCCESS)
-}
-
-fn test(config: &Config, group: Option<&str>, url: &str, timeout: u32) -> Result<ExitCode> {
-    let api = api(config)?;
-    let snapshot = api.snapshot()?;
-    let groups: Vec<&crate::api::Group> = match group {
-        Some(q) => {
-            let name = resolve_name(snapshot.groups.iter().map(|g| &g.name), q)?;
-            snapshot.groups.iter().filter(|g| g.name == name).collect()
-        }
-        None => snapshot
-            .groups
-            .iter()
-            .filter(|g| g.is_user_selector())
-            .collect(),
-    };
-    for g in groups {
-        println!("{}:", sanitize(&g.name));
-        let delays = api.group_delay(&g.name, url, timeout)?;
-        let mut rows: Vec<(&String, Option<&u32>)> =
-            g.members.iter().map(|m| (m, delays.get(m))).collect();
-        rows.sort_by_key(|(_, d)| d.map_or(u32::MAX, |d| *d));
-        for (member, delay) in rows {
-            println!(
-                "  {:<32} {}",
-                sanitize(member),
-                fmt_delay(delay.or(Some(&0)))
-            );
-        }
-    }
-    Ok(ExitCode::SUCCESS)
-}
-
-fn mode_cmd(config: &Config, mode: Option<&str>) -> Result<ExitCode> {
-    let api = api(config)?;
-    match mode {
-        Some(mode) => {
-            api.set_mode(mode)?;
-            crate::store::Store::open(&config.data_dir)?.set_mode(mode)?;
-            println!("mode: {mode}");
-        }
-        None => println!("mode: {}", api.mode()?),
-    }
-    Ok(ExitCode::SUCCESS)
-}
-
-fn core_cmd(config: &Config, cmd: CoreCommand) -> Result<ExitCode> {
-    let store = crate::store::Store::open(&config.data_dir)?;
-    match cmd {
-        CoreCommand::Install {
-            version,
-            dest,
-            mirror,
-            sha256,
-        } => {
-            let dest = dest.unwrap_or_else(|| store.root().join("bin/mihomo"));
-            let tag = crate::core::install(
-                version.as_deref(),
-                &dest,
-                mirror.as_deref(),
-                sha256.as_deref(),
-            )?;
-            println!("installed mihomo {tag} to {}", dest.display());
-        }
-        CoreCommand::Version => {
-            let bin = crate::core::resolve_bin(config, &store);
-            println!("{} ({})", crate::core::version(&bin)?, bin.display());
-        }
-    }
-    Ok(ExitCode::SUCCESS)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolves_names_forgivingly() {
-        let names: Vec<String> = ["🇳🇱 Netherlands", "🇩🇪 Germany", "AUTO"]
-            .map(String::from)
-            .to_vec();
-        assert_eq!(resolve_name(&names, "AUTO").unwrap(), "AUTO");
-        assert_eq!(resolve_name(&names, "auto").unwrap(), "AUTO");
-        assert_eq!(resolve_name(&names, "nether").unwrap(), "🇳🇱 Netherlands");
-        assert!(resolve_name(&names, "e").is_err(), "ambiguous");
-        assert!(resolve_name(&names, "france").is_err());
-    }
 }

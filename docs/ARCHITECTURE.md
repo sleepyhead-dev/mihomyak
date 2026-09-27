@@ -28,7 +28,7 @@ Async-рантайма нет. Супервизор почти всё время
 |--------|-----------------|
 | `main.rs` | umask 077, логгер, разбор CLI, коды выхода |
 | `cli.rs` | clap-описание команд |
-| `commands.rs` | реализация команд (status, proxies, select, fetch, check…) |
+| `commands/` | реализация команд (status, proxies, select, fetch, check…), разбита по модулям: `subscription.rs`, `proxy.rs`, `core_cmd.rs` |
 | `config.rs` | TOML + env, валидация, значения по умолчанию |
 | `identity.rs` | machine-id, os-release (два парсера: по спецификации и «как регулярка Koala»), hostname, локаль |
 | `emulation.rs` | **точные** заголовки FlClashX / Koala / Happ, формулы HWID и UA |
