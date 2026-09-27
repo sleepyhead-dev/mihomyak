@@ -328,6 +328,35 @@ mod tests {
     }
 
     #[test]
+    fn group_selector_helpers() {
+        let selector = Group {
+            name: "PROXY".to_owned(),
+            kind: "Selector".to_owned(),
+            now: None,
+            members: vec![],
+        };
+        assert!(selector.selectable());
+        assert!(selector.is_user_selector());
+
+        let global = Group {
+            name: "GLOBAL".to_owned(),
+            ..selector.clone()
+        };
+        assert!(global.selectable());
+        assert!(
+            !global.is_user_selector(),
+            "GLOBAL only matters in global mode"
+        );
+
+        let url_test = Group {
+            kind: "URLTest".to_owned(),
+            ..selector
+        };
+        assert!(!url_test.selectable());
+        assert!(!url_test.is_user_selector());
+    }
+
+    #[test]
     fn controller_addresses() {
         let api = Api::new("0.0.0.0:9090", "").unwrap();
         assert_eq!(api.host, "127.0.0.1:9090");

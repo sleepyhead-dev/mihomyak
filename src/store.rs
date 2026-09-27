@@ -266,6 +266,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn restricts_permissions_on_the_data_dir_and_secret_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("data");
+        let store = Store::open(&root).unwrap();
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&root), 0o700);
+
+        store.machine_id().unwrap();
+        assert_eq!(mode(&root.join("machine-id")), 0o600);
+
+        store.secret().unwrap();
+        assert_eq!(mode(&root.join("secret")), 0o600);
+
+        store.save_body(b"proxies: []").unwrap();
+        assert_eq!(mode(&store.body_path()), 0o600);
+    }
+
+    #[test]
     fn persists_generated_values() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();

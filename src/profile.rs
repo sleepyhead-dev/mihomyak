@@ -1029,6 +1029,31 @@ rules:
     }
 
     #[test]
+    fn sanitize_nodes_drops_unsupported_and_reserved() {
+        let yaml = r#"
+proxies:
+  - {name: NL, type: ss, server: nl.example, port: 1, cipher: aes-128-gcm, password: p}
+  - {name: Mesh, type: tailscale, server: mesh.example, port: 1}
+  - {name: DIRECT, type: vless, server: bad.example, port: 443, uuid: x}
+proxy-groups:
+  - {name: G, type: select, proxies: [NL, Mesh, DIRECT]}
+rules:
+  - MATCH,G
+"#;
+        let built = build(&parsed(yaml), &Config::default(), &params("s")).unwrap();
+        let v: Value = serde_norway::from_str(&built.config_yaml).unwrap();
+        assert_eq!(names(&v["proxies"]), ["NL"]);
+        assert_eq!(names(&v["proxy-groups"][0]["proxies"]), ["NL"]);
+        let warning = built
+            .warnings
+            .iter()
+            .find(|w| w.contains("dropped unsupported proxies"))
+            .expect("a warning about dropped proxies");
+        assert!(warning.contains("Mesh (tailscale)"));
+        assert!(warning.contains("DIRECT (reserved name)"));
+    }
+
+    #[test]
     fn strips_provider_networking_keys() {
         let v = built(&parsed(REMNAWAVE), &Config::default());
         assert_eq!(v["mixed-port"].as_u64(), Some(7890));
