@@ -780,10 +780,16 @@ mod tests {
     #[test]
     fn only_files_with_secrets_need_private_permissions() {
         let holds = |text: &str| toml::from_str::<Config>(text).unwrap().holds_secrets();
-        assert!(!holds("[filter]\nexclude = [\"*RU*\"]\n[[groups]]\nname = \"A\""));
-        assert!(holds("[subscription]\nurl = \"https://panel.example/sub/x\""));
+        assert!(!holds(
+            "[filter]\nexclude = [\"*RU*\"]\n[[groups]]\nname = \"A\""
+        ));
+        assert!(holds(
+            "[subscription]\nurl = \"https://panel.example/sub/x\""
+        ));
         assert!(holds("[core]\nauth = [\"user:pass\"]"));
-        assert!(holds("[device]\nmachine_id = \"0d0af05ee8fd4dc29275718f2ce4dff1\""));
+        assert!(holds(
+            "[device]\nmachine_id = \"0d0af05ee8fd4dc29275718f2ce4dff1\""
+        ));
     }
 
     #[test]
