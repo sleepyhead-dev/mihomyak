@@ -42,8 +42,10 @@ services:
       MIHOMYAK_LOG: info
       TZ: Europe/Moscow
     volumes:
+      # A real volume: a restart must keep the machine-id and the cache.
+      - gw-data:/data
       - ./gateway.toml:/data/config.toml:ro
-    tmpfs: [/tmp, "/data:mode=0700"]
+    tmpfs: [/tmp]
     dns: [1.1.1.1]
     devices: [/dev/net/tun:/dev/net/tun]
     cap_add: [NET_ADMIN]
@@ -155,3 +157,7 @@ networks:
     name: mhk-e2e-inet
     internal: true
     ipam: {config: [{subnet: 203.0.113.0/24}]}
+
+volumes:
+  gw-data:
+    name: mhk-e2e-gw-data
