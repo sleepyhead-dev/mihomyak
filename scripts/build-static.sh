@@ -4,10 +4,18 @@
 #
 #   rustup target add aarch64-unknown-linux-musl
 #   ./scripts/build-static.sh aarch64-unknown-linux-musl
+#
+# `test` as the second argument runs the test suite for that target instead
+# (CI runs foreign targets under qemu-user via CARGO_TARGET_<TRIPLE>_RUNNER).
 set -eu
 
-target="${1:?usage: $0 <rust-target-triple> [cargo args…]}"
+target="${1:?usage: $0 <rust-target-triple> [test] [cargo args…]}"
 shift
+mode=build
+if [ "${1:-}" = test ]; then
+  mode=test
+  shift
+fi
 
 case "$target" in
   x86_64-unknown-linux-musl) clang_target=x86_64-linux-musl ;;
@@ -26,5 +34,8 @@ if [ "$target" != "x86_64-unknown-linux-musl" ]; then
   export "CARGO_TARGET_${env_target}_LINKER=rust-lld"
 fi
 
+if [ "$mode" = test ]; then
+  exec cargo test --locked --target "$target" "$@"
+fi
 cargo build --release --locked --target "$target" "$@"
 file "${CARGO_TARGET_DIR:-target}/$target/release/mihomyak" 2>/dev/null || true

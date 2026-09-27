@@ -65,6 +65,10 @@ jobs:
           - x86_64-unknown-linux-musl
           - aarch64-unknown-linux-musl
           - armv7-unknown-linux-musleabihf
+    env:
+      # The test suite of the ARM targets runs under qemu-user.
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUNNER: qemu-aarch64-static
+      CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_RUNNER: qemu-arm-static
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -88,6 +92,10 @@ jobs:
           $run --version
           $run --help > /dev/null
           ls -l "$bin"
+      # ARM is the primary target: run the whole suite there too (x86_64 runs in `check`).
+      - name: Tests (qemu)
+        if: ${{ !startsWith(matrix.target, 'x86_64') }}
+        run: ./scripts/build-static.sh ${{ matrix.target }} test
       - uses: actions/upload-artifact@v4
         with:
           name: mihomyak-${{ matrix.target }}
@@ -102,26 +110,60 @@ jobs:
       - uses: actions/checkout@v5
       - uses: EmbarkStudios/cargo-deny-action@v2
 
+  # The image packs the static binaries of the `build` job (Dockerfile
+  # BINARY=prebuilt): no second compilation, and the image ships exactly the
+  # binaries that were tested and that a release attaches.
   docker:
     name: Docker image
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v5
+      - name: Fetch the static binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mihomyak-*-linux-musl*
+          path: artifacts
+      - name: Lay them out as dist/<arch>/mihomyak
+        run: |
+          for pair in amd64:x86_64-unknown-linux-musl arm64:aarch64-unknown-linux-musl \
+                      armv7:armv7-unknown-linux-musleabihf; do
+            mkdir -p "dist/${pair%%:*}"
+            cp "artifacts/mihomyak-${pair#*:}/mihomyak" "dist/${pair%%:*}/mihomyak"
+          done
+          ls -l dist/*/mihomyak
       - uses: docker/setup-buildx-action@v3
       - name: Build amd64 image for testing
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
+          build-args: BINARY=prebuilt
           load: true
           tags: mihomyak:ci
-          cache-from: type=gha,scope=amd64
-          cache-to: type=gha,scope=amd64,mode=max
       - name: End-to-end test (mock panel, proxy and TUN gateway with kill switch)
         run: ./scripts/e2e-docker.sh mihomyak:ci
+      # For hands-on tests on an ARM box without registry credentials:
+      #   gunzip -c mihomyak-arm64.tar.gz | docker load   (tag mihomyak:ci-arm64)
+      - name: Export the arm64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          build-args: BINARY=prebuilt
+          tags: mihomyak:ci-arm64
+          outputs: type=docker,dest=${{ runner.temp }}/mihomyak-arm64.tar
+      - run: gzip -9 "$RUNNER_TEMP/mihomyak-arm64.tar"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-arm64
+          path: ${{ runner.temp }}/mihomyak-arm64.tar.gz
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
       - name: Validate compose files
         run: |
           cp deploy/.env.example deploy/.env
@@ -147,10 +189,39 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64,linux/arm/v7
+          build-args: BINARY=prebuilt
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: |
-            type=gha,scope=amd64
-            type=gha,scope=multiarch
-          cache-to: type=gha,scope=multiarch,mode=max
+
+  # `docker build .` compiles from source for users without prebuilt binaries.
+  # That path is slow, so it is checked on main and when a PR touches it.
+  docker-source:
+    name: Docker image from source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: changed
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] \
+            || git diff --name-only "origin/$GITHUB_BASE_REF...HEAD" \
+              | grep -qE '^(Dockerfile|\.dockerignore|Cargo\.(toml|lock)|rust-toolchain)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Dockerfile and dependencies unchanged: skipped"
+          fi
+      - if: steps.changed.outputs.run == 'true'
+        uses: docker/setup-buildx-action@v3
+      - if: steps.changed.outputs.run == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: mihomyak:source
+          cache-from: type=gha,scope=source-amd64
+          cache-to: type=gha,scope=source-amd64,mode=max
+      - if: steps.changed.outputs.run == 'true'
+        run: docker run --rm mihomyak:source --version

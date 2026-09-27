@@ -3,3 +3,5 @@
 !Cargo.toml
 !Cargo.lock
 !src/
+# Prebuilt static binaries for `docker build --build-arg BINARY=prebuilt`.
+!dist/*/mihomyak
