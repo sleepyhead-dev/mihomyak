@@ -16,7 +16,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
   `compose.gateway.yml` now has `depends_on: … restart: true`, so Compose
   restarts it after the gateway; documented in docs/DOCKER.md.
 
+- The permission warning for the config file ("readable by other users…") was
+  printed for any config, also one without secrets; now only when the file
+  holds the subscription URL, proxy passwords, the API secret or the device id.
+
 ### Changed
+- First start without a cached subscription: network errors are retried after
+  5, 10, 20, 40 s… instead of 1, 2, 4 min (nothing runs until the first
+  config, a gateway has no network at all). Panel refusals keep the slow pace.
 - CI: images pack the static binaries of the build job instead of compiling
   again in Docker (the multi-arch `edge` image no longer builds three targets);
   the test suite also runs for aarch64 and armv7 under qemu; releases publish
