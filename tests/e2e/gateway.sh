@@ -26,7 +26,7 @@ fail() {
   exit 1
 }
 cleanup() {
-  docker rm -f mhk-e2e-stop >/dev/null 2>&1 || true
+  docker rm -f mhk-e2e-stop mhk-e2e-noconf >/dev/null 2>&1 || true
   compose down -v --timeout 5 >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -139,15 +139,42 @@ wait_for 60 "return to E2E-1" target_is 203.0.113.21
 ok "node 1 back: traffic returns"
 
 step "kill switch"
-gw kill -STOP 1
-gw sh -c 'kill -9 "$(pidof mihomo)"'
-sleep 1
-out=$(app curl -sS -m 5 -o /dev/null https://1.1.1.1 2>&1 || true)
-[[ $out == *"Could not connect"* || $out == *refused* ]] || fail "traffic while mihomo is down: '$out'"
-ok "mihomo dead, supervisor frozen: outgoing traffic is refused"
-gw mihomyak fetch >/dev/null || fail "the supervisor's own requests are blocked"
-ok "mihomyak still reaches the panel"
-gw kill -CONT 1
+refused() { [[ $1 == *"Could not connect"* || $1 == *refused* ]]; }
+# Before the first config mihomo never runs: a gateway whose panel only answers
+# garbage must refuse its clients' traffic instead of letting it out directly.
+docker run -d --name mhk-e2e-noconf --network mhk-e2e-wan --dns 1.1.1.1 \
+  --read-only --tmpfs /tmp --tmpfs /data --cap-drop ALL --cap-add NET_ADMIN \
+  --device /dev/net/tun --security-opt no-new-privileges \
+  -e MIHOMYAK_GATEWAY=1 -e MIHOMYAK_KILL_SWITCH=1 \
+  -e MIHOMYAK_SUB_URL=http://10.203.0.13:8081/sub/garbage "$image" >/dev/null
+wait_for 30 "kill switch installed" docker exec mhk-e2e-noconf iptables -C OUTPUT -j MIHOMYAK
+out=$(docker run --rm --network container:mhk-e2e-noconf curlimages/curl:latest \
+  -sS -m 5 -o /dev/null https://1.1.1.1 2>&1 || true)
+refused "$out" || fail "traffic before the first config: '$out'"
+docker rm -f mhk-e2e-noconf >/dev/null
+ok "no config yet: outgoing traffic is refused, not sent directly"
+
+# After a crash of mihomo: freeze the supervisor from outside its PID namespace
+# (PID 1 ignores SIGSTOP sent from inside) so it cannot restart the core.
+if sudo -n true 2>/dev/null; then
+  host_pid=$(docker inspect -f '{{.State.Pid}}' mhk-gw)
+  sudo kill -STOP "$host_pid"
+  gw sh -c 'kill -9 "$(pidof mihomo)"'
+  sleep 2
+  if gw pidof mihomo >/dev/null; then
+    sudo kill -CONT "$host_pid"
+    fail "mihomo came back while the supervisor was frozen"
+  fi
+  out=$(app curl -sS -m 5 -o /dev/null https://1.1.1.1 2>&1 || true)
+  refused "$out" || { sudo kill -CONT "$host_pid"; fail "traffic while mihomo is down: '$out'"; }
+  ok "mihomo dead, supervisor frozen: outgoing traffic is refused"
+  gw mihomyak fetch >/dev/null || { sudo kill -CONT "$host_pid"; fail "mihomyak cannot reach the panel"; }
+  ok "mihomyak still reaches the panel"
+  sudo kill -CONT "$host_pid"
+else
+  gw sh -c 'kill -9 "$(pidof mihomo)"'
+  ok "no sudo: crash window not frozen, only the restart is checked"
+fi
 wait_for 30 "mihomo restarted" gw mihomyak health
 expect_node "" "after the restart traffic goes through a node again"
 
