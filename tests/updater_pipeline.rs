@@ -2,68 +2,21 @@
 //! against in-process fake HTTP servers, following the pattern in
 //! `tests/golden_requests.rs`.
 
-use std::io::{Read, Write};
-use std::net::TcpListener;
+mod support;
+
 use std::path::Path;
-use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use mihomyak::client::emulation::ClientKind;
 use mihomyak::config::Config;
 use mihomyak::service::updater::{Outcome, Updater};
 use mihomyak::subscription::Problem;
+use support::{ok_response, spawn_server, status_response};
 
 const GOOD_BODY: &[u8] = include_bytes!("fixtures/subscriptions/remnawave-mihomo.yaml");
 /// Remnawave-style stub: a single placeholder proxy, no real servers.
 const STUB_BODY: &[u8] =
     b"proxies:\n  - {name: Limit of devices reached, type: vless, server: 0.0.0.0, port: 1}\n";
-
-/// Serves `responses` in order, one per accepted connection, then exits.
-/// Read/write timeouts on every socket keep a broken test from hanging CI.
-fn spawn_server(responses: Vec<Vec<u8>>) -> (u16, JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let handle = thread::spawn(move || {
-        for response in responses {
-            let (mut sock, _) = listener.accept().unwrap();
-            sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-            sock.set_write_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
-            let mut head = Vec::new();
-            let mut byte = [0u8; 1];
-            while !head.ends_with(b"\r\n\r\n") {
-                sock.read_exact(&mut byte).unwrap();
-                head.push(byte[0]);
-            }
-            sock.write_all(&response).unwrap();
-        }
-    });
-    (port, handle)
-}
-
-/// A `200 OK` response with a body and extra headers (e.g. `subscription-userinfo`).
-fn ok_response(body: &[u8], extra_headers: &[(&str, &str)]) -> Vec<u8> {
-    status_response(200, "OK", body, extra_headers)
-}
-
-fn status_response(
-    status: u16,
-    reason: &str,
-    body: &[u8],
-    extra_headers: &[(&str, &str)],
-) -> Vec<u8> {
-    let mut head = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\n",
-        body.len()
-    );
-    for (name, value) in extra_headers {
-        head.push_str(&format!("{name}: {value}\r\n"));
-    }
-    head.push_str("\r\n");
-    let mut wire = head.into_bytes();
-    wire.extend_from_slice(body);
-    wire
-}
 
 /// A default config pointed at `port`, with `mihomo -t` validation guaranteed to be
 /// skipped (nonexistent binary path): `Updater::validate` logs a warning and lets the

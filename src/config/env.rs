@@ -22,6 +22,9 @@ impl Config {
         if let Some(v) = env("MIHOMYAK_SUB_URL") {
             sub.url = Some(v);
         }
+        if let Some(v) = env("MIHOMYAK_PLATFORM") {
+            sub.platform = v.parse()?;
+        }
         if let Some(v) = env("MIHOMYAK_CLIENT") {
             sub.client = v.parse()?;
         }
@@ -34,9 +37,6 @@ impl Config {
 
         if let Some(v) = env("MIHOMYAK_FETCH_PROXY") {
             sub.proxy = Some(v).filter(|s| !s.is_empty());
-        }
-        if let Some(v) = flag("MIHOMYAK_ACCEPT_STUB")? {
-            sub.accept_stub = v;
         }
         let update = &mut self.update;
         if let Some(v) = env("MIHOMYAK_UPDATE_INTERVAL") {

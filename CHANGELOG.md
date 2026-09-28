@@ -4,6 +4,40 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-28
+
+### Added
+- **Happ for Windows and Android.** `platform = "windows" | "android"`
+  (`MIHOMYAK_PLATFORM`, installer `--platform`) makes the `happ` client send
+  exactly what the real apps send: requests of Happ for Windows 4.2.1–4.4.8
+  (x64 and arm64) and Happ for Android 4.4.1/4.6.0 were captured on GitHub
+  runners and an Android emulator (`.github/workflows/capture.yml`). Many
+  providers refuse Linux but accept these. The Windows MachineGuid and
+  computer name and the Android ID are derived from the seed; `device.model`
+  and `device.os_version` change the reported phone and OS version.
+  `fetch`/`identity` take `--platform`. The installer asks for it when Happ is
+  chosen.
+
+### Removed
+- `subscription.accept_stub` / `MIHOMYAK_ACCEPT_STUB`: a provider stub is never
+  applied now, only ever refused.
+- The `custom` client kind. Use `flclashx`, `koala` or `happ`; the
+  `subscription.user_agent` override still works with any of them.
+- `device.send_headers`: the `x-hwid`/`x-device-*` headers are always sent.
+- The os-release field overrides `device.os_name` and `device.os_pretty_name`;
+  `device.os_version` now means the Windows/Android version Happ reports.
+  `device.os_release` (the file path) is unchanged.
+- The unix-socket mihomo controller (`core.controller = "unix:/path"`).
+  `core.controller` is always `host:port` now.
+- `gateway.dns_listen`: mihomo's DNS server always listens on the fixed
+  `127.0.0.1:1053`.
+
+### Changed
+- CI builds and tests aarch64 natively on an ARM runner; coverage runs on
+  `main` only; the Docker smoke test leaves the gateway to the gateway stand;
+  the kill switch stand check fails instead of skipping without sudo in CI;
+  the integration tests share one fake server.
+
 ## [0.3.0] - 2026-09-28
 
 ### Added

@@ -9,6 +9,7 @@ use std::process::ExitCode;
 use anyhow::{Result, bail};
 
 use crate::cli::{Cli, Command};
+use crate::client::emulation::{ClientKind, Platform};
 use crate::config::Config;
 use crate::mihomo::api::Api;
 use crate::subscription::ProviderInfo;
@@ -21,21 +22,18 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
         Command::Update => subscription::update(config),
         Command::Fetch {
             client,
+            platform,
             user_agent,
             body,
         } => {
-            if let Some(client) = client {
-                config.subscription.client = client;
-            }
+            impersonate(&mut config, client, platform);
             if user_agent.is_some() {
                 config.subscription.user_agent = user_agent;
             }
             subscription::fetch(config, body)
         }
-        Command::Identity { client } => {
-            if let Some(client) = client {
-                config.subscription.client = client;
-            }
+        Command::Identity { client, platform } => {
+            impersonate(&mut config, client, platform);
             subscription::identity(config)
         }
         Command::Status => subscription::status(config),
@@ -53,6 +51,16 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
         Command::Check => subscription::check(config),
         Command::Health => Ok(core_cmd::health(&config)),
         Command::Core(cmd) => core_cmd::core_cmd(&config, cmd),
+    }
+}
+
+/// `--client` / `--platform` of `fetch` and `identity`: another client for this run.
+fn impersonate(config: &mut Config, client: Option<ClientKind>, platform: Option<Platform>) {
+    if let Some(client) = client {
+        config.subscription.client = client;
+    }
+    if let Some(platform) = platform {
+        config.subscription.platform = platform;
     }
 }
 

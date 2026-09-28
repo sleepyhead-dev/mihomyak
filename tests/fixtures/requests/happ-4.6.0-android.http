@@ -1,0 +1,11 @@
+GET /sub/abc HTTP/1.1
+Connection: close
+User-agent: Happ/4.6.0/Android/17903218884031681667
+X-Device-Locale: en
+X-HWID: 3693bef137bbd47f
+X-Device-OS: Android
+X-Ver-OS: 14
+X-Device-model: sdk_gphone64_x86_64
+Host: 127.0.0.1:{PORT}
+Accept-Encoding: gzip
+

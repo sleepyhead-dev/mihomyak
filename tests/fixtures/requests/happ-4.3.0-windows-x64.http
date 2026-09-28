@@ -1,0 +1,13 @@
+GET /sub/abc HTTP/1.1
+Host: 127.0.0.1:{PORT}
+User-Agent: Happ/4.3.0/Windows/2609151455603
+X-App-Version: 4.3.0
+X-Device-Locale: EN
+X-Device-Os: Windows
+X-Device-Model: runnervm99s1a_x86_64
+X-Hwid: a3ee4d8e-7e6c-4c32-9490-f157ef0ceea8
+X-Ver-Os: 11_10.0.26100
+Connection: Keep-Alive
+Accept-Encoding: gzip, deflate
+Accept-Language: en-US,*
+

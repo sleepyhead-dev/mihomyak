@@ -392,9 +392,78 @@ Remnawave XRAY_JSON — это **массив** полных Xray-конфиго
 `Accept-Language` для локалей, кроме `C`/`en` и `ru_RU`; `X-Ver-Os` для дистрибутивов без
 `ID`/`VERSION_ID` (Qt вернёт `unknown`).
 
-Android-версия Happ (по сторонним данным, **не проверено**): `User-Agent: Happ/<ver>`,
-`X-Device-Os: Android`, `X-Ver-Os: <android>`, `X-Device-Model: <model>`,
-`X-Hwid: <16 hex>`, `X-Device-Locale`, `X-Real-Ip`, `X-Forwarded-For`.
+### 7.3.1 Happ для Windows 4.2.1–4.4.8 (Qt)
+
+**[cap]** Лаборатория `.github/workflows/capture.yml`: установщик
+`setup-Happ.<arch>.exe` из `Happ-proxy/happ-desktop` ставится молча на раннер
+`windows-latest` / `windows-11-arm`, ссылка `happ://add/<url>` открывается через
+обработчик протокола, запрос ловит `tests/capture/capture_server.py`. 4.3.0 x64
+(фикстура `happ-4.3.0-windows-x64.http`):
+
+```http
+GET /sub/abc HTTP/1.1
+Host: 127.0.0.1:18080
+User-Agent: Happ/4.3.0/Windows/2609151455603
+X-App-Version: 4.3.0
+X-Device-Locale: EN
+X-Device-Os: Windows
+X-Device-Model: runnervm99s1a_x86_64
+X-Hwid: a3ee4d8e-7e6c-4c32-9490-f157ef0ceea8
+X-Ver-Os: 11_10.0.26100
+Connection: Keep-Alive
+Accept-Encoding: gzip, deflate
+Accept-Language: en-US,*
+
+```
+
+| Поле | Значение | Проверено |
+|------|----------|-----------|
+| UA | `Happ/<ver>/Windows/<build><маркер дня><2 цифры>` | build: 4.2.1 `2609041405`, 4.3.0 x64 `2609151455`, arm64 `2609151502`, 4.4.8 `2609281147`; хвост: `06`, `03` (обе архитектуры), `02` — константа сборки, как `98` у Linux 4.3.0 |
+| `X-Hwid` | `MachineGuid` из `HKLM\SOFTWARE\Microsoft\Cryptography` как есть | совпал с реестром раннера во всех захватах |
+| `X-Device-Model` | `<имя компьютера>_<x86_64\|arm64>` | x64 и arm64 |
+| `X-Ver-Os` | `<productVersion>_<kernelVersion>`: `11_10.0.26100`, `11_10.0.26200` | Server 2025 и Windows 11 25H2 |
+| `X-Device-Locale` / `Accept-Language` | `EN` / `en-US,*` для культуры en-US | регион в Windows есть всегда |
+| `Accept-Encoding` | `gzip, deflate` (в Windows-сборке нет brotli и zstd) | все захваты |
+
+Маркер дня (`5`/`6`) тот же, что в Linux-сборке: захват 28-го числа по Москве даёт `6`, захват
+с часами раннера, переведёнными на 29-е, — `2609151455503` (проверено для Windows и Android).
+
+mihomyak (`platform = "windows"`, только `client = "happ"`) выводит из machine-id
+`MachineGuid` (UUID v4 в нижнем регистре) и имя компьютера `DESKTOP-XXXXXXX`;
+по умолчанию эмулируется Windows 11 24H2 x64 (`11_10.0.26100`).
+
+### 7.3.2 Happ для Android 4.4.1 и 4.6.0 (OkHttp)
+
+**[cap]** Та же лаборатория: `Happ.apk` из `Happ-proxy/happ-android` в эмуляторе
+Android 14 (`reactivecircus/android-emulator-runner`), deep link
+`happ://add/<url>` через `am start`. 4.6.0 (фикстура `happ-4.6.0-android.http`):
+
+```http
+GET /sub/abc HTTP/1.1
+Connection: close
+User-agent: Happ/4.6.0/Android/17903218884031681667
+X-Device-Locale: en
+X-HWID: 3693bef137bbd47f
+X-Device-OS: Android
+X-Ver-OS: 14
+X-Device-model: sdk_gphone64_x86_64
+Host: 10.0.2.2:18080
+Accept-Encoding: gzip
+
+```
+
+| Поле | Значение | Проверено |
+|------|----------|-----------|
+| UA | `Happ/<ver>/Android/<время сборки, мс><versionCode><маркер дня><2 цифры>` | 4.6.0: `1790321888403`+`1681`+`6`+`67`; 4.4.1: `1789111253828`+`1661`+`6`+`90`; время сборки = дата релиза, versionCode из APK |
+| `X-HWID` | 16 hex, app-scoped `ANDROID_ID` (отличается от `settings get secure android_id` оболочки) | два запуска — разные значения |
+| `X-Ver-OS` | `Build.VERSION.RELEASE` | `14` |
+| `X-Device-model` | `Build.MODEL` | `sdk_gphone64_x86_64` |
+| `X-Device-Locale` | язык в нижнем регистре | `en` |
+| порядок, регистр | заголовки приложения, затем `Host` и `Accept-Encoding` от OkHttp; `X-App-Version` и `Accept-Language` не шлются | оба захвата |
+
+mihomyak (`platform = "android"`) выводит `ANDROID_ID` из machine-id; по умолчанию
+эмулируется Galaxy S24 (`SM-S921B`) на Android 14 (`device.model`, `device.os_version`).
+iOS-версию Happ (только App Store) захватить в CI нельзя: нужен запрос с телефона.
 
 ---
 

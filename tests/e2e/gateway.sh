@@ -17,6 +17,7 @@ app() { docker exec mhk-app "$@"; }
 
 step() { printf '\n== %s\n' "$*"; }
 ok() { printf '   ok  %s\n' "$*"; }
+skip() { printf '   skip  %s\n' "$*"; }
 fail() {
   printf '\nFAIL: %s\n' "$*" >&2
   compose ps -a >&2 || true
@@ -173,9 +174,11 @@ if sudo -n true 2>/dev/null; then
   gw mihomyak fetch >/dev/null || { sudo kill -CONT "$host_pid"; fail "mihomyak cannot reach the panel"; }
   ok "mihomyak still reaches the panel"
   sudo kill -CONT "$host_pid"
+elif [[ ${CI:-} == true ]]; then
+  fail "no passwordless sudo in CI: cannot test the frozen-supervisor crash window"
 else
   gw sh -c 'kill -9 "$(pidof mihomo)"'
-  ok "no sudo: crash window not frozen, only the restart is checked"
+  skip "no sudo: crash window not frozen, only the restart is checked"
 fi
 wait_for 30 "mihomo restarted" gw mihomyak health
 expect_node "" "after the restart traffic goes through a node again"

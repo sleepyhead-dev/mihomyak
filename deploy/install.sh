@@ -2,7 +2,7 @@
 # mihomyak installer: Docker gateway, Docker proxy or a systemd service.
 #
 #   curl -fsSL https://github.com/sleepyhead-dev/mihomyak/releases/latest/download/install.sh | sh
-#   sh install.sh [install] [--url URL] [--mode gateway|proxy|systemd] [--client NAME]
+#   sh install.sh [install] [--url URL] [--mode gateway|proxy|systemd] [--client NAME] [--platform OS]
 #                 [--seed WORD] [--dir DIR] [--yes] [--no-cli]
 #   sh install.sh update | uninstall [--purge] [--yes]
 #
@@ -15,13 +15,14 @@ REPO=sleepyhead-dev/mihomyak
 RELEASE="https://github.com/$REPO/releases/latest/download"
 DOCS="https://github.com/$REPO/blob/main/docs"
 
-action=install url= mode= client= seed= dir= yes= cli=1 purge= from= image= binary=
+action=install url= mode= client= platform= seed= dir= yes= cli=1 purge= from= image= binary=
 while [ $# -gt 0 ]; do
   case $1 in
     install | update | uninstall) action=$1 ;;
     --url) url=${2:?}; shift ;;
     --mode) mode=${2:?}; shift ;;
     --client) client=${2:?}; shift ;;
+    --platform) platform=${2:?}; shift ;;
     --seed) seed=${2:?}; shift ;;
     --dir) dir=${2:?}; shift ;;
     --yes | -y) yes=1 ;;
@@ -125,6 +126,7 @@ write_env() {
     printf '# Apply changes: cd %s && docker compose up -d\n\n' "$dir"
     printf 'MIHOMYAK_SUB_URL=%s\n' "$url"
     printf 'MIHOMYAK_CLIENT=%s\n' "$client"
+    [ "$platform" = linux ] || printf 'MIHOMYAK_PLATFORM=%s\n' "$platform"
     printf '# The device the provider sees: the same seed and client, the same device.\n'
     printf 'MIHOMYAK_DEVICE_SEED=%s\n' "$seed"
     printf 'TZ=%s\n' "$(host_tz)"
@@ -280,7 +282,8 @@ install_systemd() {
     {
       printf '# mihomyak settings (install.sh). All keys: %s/CONFIG.md\n' "$DOCS"
       printf '# Apply changes: sudo systemctl restart mihomyak\n\n'
-      printf '[subscription]\nurl = %s\nclient = %s\n\n' "$(toml_string "$url")" "$(toml_string "$client")"
+      printf '[subscription]\nurl = %s\nclient = %s\nplatform = %s\n\n' "$(toml_string "$url")" \
+        "$(toml_string "$client")" "$(toml_string "$platform")"
       printf '[device]\n# The same seed and client, the same device.\nseed = %s\n' "$(toml_string "$seed")"
     } | as_root sh -c 'umask 077; cat > /etc/mihomyak/config.toml'
   fi
@@ -385,10 +388,20 @@ if [ -z "$keep_settings" ]; then
   [ -n "$url" ] || ask url "Ссылка на подписку" "Subscription link" ""
   case $url in http://* | https://*) ;; *) die "Нужна ссылка вида https://…" "A https://… link is required." ;; esac
   if [ -z "$client" ]; then
+    say "Клиент: flclashx — если провайдер пускает Linux; happ — если он принимает Happ (под Windows или Android)." \
+        "Client: flclashx if the provider accepts Linux; happ if it accepts Happ (on Windows or Android)."
     ask client "Клиент, которым представляться (flclashx, koala, happ)" \
       "Client to impersonate (flclashx, koala, happ)" flclashx
   fi
   case $client in flclashx | koala | happ) ;; *) die "Неизвестный клиент: $client" "Unknown client: $client" ;; esac
+  if [ "$client" = happ ] && [ -z "$platform" ]; then
+    ask platform "Платформа Happ (windows, android, linux)" "Happ platform (windows, android, linux)" windows
+  fi
+  platform=${platform:-linux}
+  case $platform in linux | windows | android) ;; *) die "Неизвестная платформа: $platform" "Unknown platform: $platform" ;; esac
+  if [ "$platform" != linux ] && [ "$client" != happ ]; then
+    die "Платформа $platform есть только у клиента happ." "Platform $platform exists only for client happ."
+  fi
   if [ -z "$seed" ]; then
     say "Seed — любое слово или фраза, из него получается устройство. Тот же seed — то же устройство у провайдера на любом сервере." \
         "The seed is any word or phrase the device is derived from. The same seed is the same device on any server."

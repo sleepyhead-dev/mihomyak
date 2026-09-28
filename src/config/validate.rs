@@ -3,9 +3,14 @@
 use anyhow::{Context, Result, bail};
 
 use super::{Config, is_mode};
+use crate::client::emulation::{ClientKind, Platform};
 
 impl Config {
     pub(super) fn validate(&self) -> Result<()> {
+        let sub = &self.subscription;
+        if sub.platform != Platform::Linux && sub.client != ClientKind::Happ {
+            bail!("platform {} is emulated only for client happ", sub.platform);
+        }
         if self.device.machine_id.is_some() && self.device.seed.is_some() {
             bail!("set either device.machine_id or device.seed, not both");
         }
@@ -57,12 +62,8 @@ impl Config {
             ("device.hwid", self.device.hwid.iter().collect()),
             ("device.machine_id", self.device.machine_id.iter().collect()),
             ("device.hostname", self.device.hostname.iter().collect()),
-            ("device.os_name", self.device.os_name.iter().collect()),
             ("device.os_version", self.device.os_version.iter().collect()),
-            (
-                "device.os_pretty_name",
-                self.device.os_pretty_name.iter().collect(),
-            ),
+            ("device.model", self.device.model.iter().collect()),
             ("device.locale", vec![&self.device.locale]),
         ];
         for (key, values) in header_values {
@@ -96,7 +97,7 @@ impl Config {
                 host.trim_matches(['[', ']']),
                 "127.0.0.1" | "localhost" | "::1"
             ) || host.starts_with("127.");
-            if !self.core.controller.starts_with("unix:") && !loopback {
+            if !loopback {
                 if self.core.secret.as_deref() == Some("") {
                     bail!(
                         "core.controller {} is reachable from the network: an empty secret is not allowed",

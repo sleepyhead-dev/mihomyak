@@ -124,11 +124,11 @@ pub struct Analysis {
 }
 
 impl Analysis {
-    /// Content that may be applied (`accept_stub` lets placeholder configs through).
-    pub fn usable(&self, accept_stub: bool) -> Option<&Content> {
+    /// Content that may be applied: refused whenever the response carries a
+    /// problem, a provider stub included.
+    pub fn usable(&self) -> Option<&Content> {
         match &self.problem {
             None => self.content.as_ref(),
-            Some(Problem::Stub(_)) if accept_stub => self.content.as_ref(),
             Some(_) => None,
         }
     }
@@ -218,7 +218,7 @@ mod tests {
     fn good_config_is_usable() {
         let a = analyze_(&response(200, &[("profile-title", "VPN")], GOOD));
         assert!(a.problem.is_none());
-        assert!(a.usable(false).is_some());
+        assert!(a.usable().is_some());
         assert_eq!(a.info.title.as_deref(), Some("VPN"));
     }
 
@@ -235,7 +235,7 @@ mod tests {
             "",
         ));
         assert!(matches!(a.problem, Some(Problem::Refused(_))));
-        assert!(a.usable(true).is_none());
+        assert!(a.usable().is_none());
 
         let a = analyze_(&response(
             200,
@@ -246,11 +246,10 @@ mod tests {
     }
 
     #[test]
-    fn stub_can_be_accepted_explicitly() {
+    fn stub_is_refused() {
         let a = analyze_(&response(200, &[], STUB));
         assert!(matches!(a.problem, Some(Problem::Stub(_))));
-        assert!(a.usable(false).is_none());
-        assert!(a.usable(true).is_some());
+        assert!(a.usable().is_none());
     }
 
     #[test]
