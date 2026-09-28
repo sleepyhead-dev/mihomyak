@@ -35,7 +35,7 @@ Async-рантайма нет. Супервизор почти всё время
 | **`client/`** | как mihomyak выглядит для панели |
 | `client/identity.rs` | machine-id (в том числе из seed), os-release (два парсера: по спецификации и «как регулярка Koala»), hostname, локаль |
 | `client/emulation.rs` | **точные** заголовки FlClashX / Koala / Happ, формулы HWID и UA |
-| `client/http` | свой HTTP/1.1-клиент: заголовки как есть, rustls без ALPN, chunked, gzip/deflate/br/zstd, CONNECT-прокси, unix-сокет; все размеры ограничены, общий дедлайн запроса; IDN → punycode; метка сокета (`SO_MARK`) для kill switch |
+| `client/http` | свой HTTP/1.1-клиент: заголовки как есть, rustls без ALPN, chunked, gzip/deflate/br/zstd, CONNECT-прокси; все размеры ограничены, общий дедлайн запроса; IDN → punycode; метка сокета (`SO_MARK`) и свой DNS-клиент (`dns.rs`) для kill switch |
 | **`subscription/`** | ответ панели |
 | `subscription/mod.rs` | загрузка с редиректами, `analyze` → `Problem` (Refused/Http/Invalid/Stub) |
 | `subscription/headers.rs` | `subscription-userinfo`, `profile-*`, `announce`, `x-hwid-*`, `flclashx-newdomain` |
@@ -51,7 +51,7 @@ Async-рантайма нет. Супервизор почти всё время
 | `service/updater.rs` | конвейер обновления: проверка `mihomo -t`, резервные копии `*.prev` и откат, кэш, расписание |
 | `service/schedule.rs` | cron (5 полей) и локальное время через `localtime_r` |
 | `service/store.rs` | каталог данных: machine-id, secret, блокировка супервизора (flock), mode, кэш подписки, метаданные |
-| **`gateway/`** | режим шлюза: проверка встроенного DNS Docker, который пересылает запросы мимо TUN (`mod.rs`), и kill switch — цепочка iptables/ip6tables, выпускающая только TUN, помеченный трафик, DNS, ответы и частные сети (`killswitch.rs`) |
+| **`gateway/`** | режим шлюза: проверка встроенного DNS Docker, который пересылает запросы мимо TUN (`mod.rs`), и kill switch — цепочка iptables/ip6tables, выпускающая только TUN, помеченный трафик, ответы и частные сети (`killswitch.rs`); DNS-запросы самого mihomyak при этом помечены (`client/http/dns.rs`) |
 | **`util/`** | время без chrono, размеры, sha256 (ring), атомарная запись (`mod.rs`), логгер (`log.rs`), glob-маски имён узлов и их перевод в Go-regex (`pattern.rs`) |
 
 ## Ключевые решения

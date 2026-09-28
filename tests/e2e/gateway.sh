@@ -171,8 +171,28 @@ if sudo -n true 2>/dev/null; then
   out=$(app curl -sS -m 5 -o /dev/null https://1.1.1.1 2>&1 || true)
   refused "$out" || { sudo kill -CONT "$host_pid"; fail "traffic while mihomo is down: '$out'"; }
   ok "mihomo dead, supervisor frozen: outgoing traffic is refused"
+  # Names are not resolved outside the tunnel either: neither by a public server
+  # nor through Docker's resolver, which would forward to the `dns:` upstream.
+  for server in 1.1.1.1 ""; do
+    out=$(docker run --rm --network container:mhk-gw alpine:3.22 \
+      nslookup -timeout=3 example.com $server 2>&1 || true)
+    if grep -q '^Name:' <<<"$out"; then
+      sudo kill -CONT "$host_pid"
+      fail "DNS answered while mihomo is down (server '${server:-docker}'): $out"
+    fi
+  done
+  ok "mihomo dead: app DNS does not leave either"
   gw mihomyak fetch >/dev/null || { sudo kill -CONT "$host_pid"; fail "mihomyak cannot reach the panel"; }
   ok "mihomyak still reaches the panel"
+  # The panel by name: mihomyak resolves it itself, past the kill switch.
+  if getent hosts 10.203.0.10.sslip.io >/dev/null 2>&1; then
+    out=$(fetch_as -e MIHOMYAK_SUB_URL=http://10.203.0.10.sslip.io:8080/sub/gateway)
+    grep -q "verdict:      OK" <<<"$out" \
+      || { sudo kill -CONT "$host_pid"; fail "panel by name while mihomo is down: $out"; }
+    ok "mihomyak resolves the panel's name itself"
+  else
+    skip "sslip.io unreachable: panel lookup by name not checked"
+  fi
   sudo kill -CONT "$host_pid"
 elif [[ ${CI:-} == true ]]; then
   fail "no passwordless sudo in CI: cannot test the frozen-supervisor crash window"

@@ -88,7 +88,12 @@ pub(super) fn fetch(config: Config, show_body: bool) -> Result<ExitCode> {
     for (name, value) in &fetch.request_headers {
         println!("> {name}: {value}");
     }
-    // Everything below comes from the server: strip terminal control sequences.
+    // Everything below comes from the server: strip terminal control sequences
+    // and mask the tokens it echoes back.
+    let mut owned: Vec<String> = fetch.hops.iter().map(ToString::to_string).collect();
+    owned.push(url.to_string());
+    let mut urls: Vec<&str> = owned.iter().map(String::as_str).collect();
+    urls.push(updater.config.subscription_url()?);
     let response = &fetch.response;
     println!(
         "\n< HTTP/1.1 {} {}",
@@ -96,12 +101,16 @@ pub(super) fn fetch(config: Config, show_body: bool) -> Result<ExitCode> {
         sanitize(&response.reason)
     );
     for (name, value) in &response.headers {
-        println!("< {}: {}", sanitize(name), sanitize(value));
+        println!(
+            "< {}: {}",
+            sanitize(name),
+            sanitize(&subscription::redact_in(value, &urls))
+        );
     }
     println!("< ({} bytes)", response.body.len());
 
     println!();
-    super::print_provider(&analysis.info);
+    super::print_provider(&analysis.info, &urls);
     if let Some(content) = &analysis.content {
         println!(
             "format:       {} ({} proxies)",
@@ -261,8 +270,12 @@ pub(super) fn status(config: Config) -> Result<ExitCode> {
     match store.load_meta() {
         Some(meta) => {
             let info = ProviderInfo::from_headers(&meta.headers);
+            let mut urls: Vec<&str> = config.subscription.url.as_deref().into_iter().collect();
+            if let Some((original, moved)) = &meta.url_override {
+                urls.extend([original.as_str(), moved.as_str()]);
+            }
             println!("subscription");
-            super::print_provider(&info);
+            super::print_provider(&info, &urls);
             if meta.fetched_at > 0 {
                 println!(
                     "{:<13} {} ({} proxies)",

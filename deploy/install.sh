@@ -146,11 +146,14 @@ install_cli() {
   cat >"$tmp" <<EOF
 #!/bin/sh
 # mihomyak on the host: runs its commands in the container (installed by install.sh).
-#   mihomyak status | tui | select … | logs | upgrade | uninstall
+#   mihomyak status | tui | select … | logs | restart | upgrade | uninstall
 set -e
 if ! docker info >/dev/null 2>&1 && [ "\$(id -u)" != 0 ]; then exec sudo "\$0" "\$@"; fi
 case "\${1:-}" in
   logs) shift; exec docker logs -f "\$@" mihomyak ;;
+  # Through compose: apps with \`depends_on … restart: true\` follow the gateway
+  # (a plain \`docker restart\` would leave them without network).
+  restart) cd '$dir' && exec docker compose restart mihomyak ;;
   upgrade) cd '$dir' && docker compose pull && exec docker compose up -d ;;
   uninstall) shift; curl -fsSL $RELEASE/install.sh | exec sh -s -- uninstall "\$@" ;;
 esac
@@ -204,8 +207,8 @@ install_docker() {
   step "Готово" "Done"
   say "Настройки: $dir/.env (ссылка и seed — никому не показывайте)" \
       "Settings: $dir/.env (keep the link and the seed private)"
-  say "Команды:   mihomyak status | tui | select | logs | upgrade | uninstall" \
-      "Commands:  mihomyak status | tui | select | logs | upgrade | uninstall"
+  say "Команды:   mihomyak status | tui | select | logs | restart | upgrade | uninstall" \
+      "Commands:  mihomyak status | tui | select | logs | restart | upgrade | uninstall"
   if [ "$mode" = gateway ]; then
     say "Свой контейнер через VPN — добавьте в $dir/compose.yml и выполните docker compose up -d:" \
         "Route a container through the VPN: add to $dir/compose.yml, then docker compose up -d:"

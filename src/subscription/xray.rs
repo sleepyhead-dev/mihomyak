@@ -306,7 +306,11 @@ fn hysteria(
     let auth = json_str(&stream["hysteriaSettings"]["auth"]).ok_or("no hysteria auth")?;
     set(node, "password", auth);
     apply_hysteria_tls(node, stream);
-    if stream["finalmask"].is_object() {
+    // `quicParams` only tunes QUIC (congestion control, windows): mihomo's own
+    // defaults work with the same server. Masks (obfs) would not.
+    if let Some(mask) = stream["finalmask"].as_object()
+        && mask.keys().any(|key| key != "quicParams")
+    {
         warnings.push(format!(
             "{name}: hysteria finalmask (obfs/port hopping) not converted"
         ));
@@ -867,5 +871,25 @@ mod tests {
         assert_eq!(c.proxies.len(), 1);
         assert!(c.warnings.iter().any(|w| w.contains("kcp")));
         assert!(c.warnings.iter().any(|w| w.contains("dialerProxy")));
+    }
+
+    #[test]
+    fn hysteria_quic_params_are_not_a_mask() {
+        // Shape seen in real Happ subscriptions: finalmask carries only QUIC tuning.
+        let node = |finalmask: Json| {
+            json!([{"remarks": "HY2", "outbounds": [{"tag": "proxy", "protocol": "hysteria",
+              "settings": {"address": "h.example", "port": 443, "version": 2},
+              "streamSettings": {"network": "hysteria", "security": "tls",
+                "hysteriaSettings": {"version": 2, "auth": "secret"},
+                "tlsSettings": {"serverName": "h.example", "alpn": ["h3"]},
+                "finalmask": finalmask}}]}])
+        };
+        let quic = json!({"quicParams": {"congestion": "brutal", "brutalUp": "2000 mbps"}});
+        let c = convert(&node(quic)).unwrap();
+        assert_eq!(c.proxies.len(), 1);
+        assert!(c.warnings.is_empty(), "{:?}", c.warnings);
+        let masked = json!({"udp": [{"type": "salamander"}], "quicParams": {}});
+        let c = convert(&node(masked)).unwrap();
+        assert!(c.warnings.iter().any(|w| w.contains("finalmask")));
     }
 }
