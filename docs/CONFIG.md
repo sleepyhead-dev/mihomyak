@@ -25,8 +25,9 @@
 |------|--------------|-----|----------|
 | `url` | — | `MIHOMYAK_SUB_URL` | ссылка на подписку (секрет: в логах маскируется) |
 | `client` | `flclashx` | `MIHOMYAK_CLIENT` | `flclashx`, `koala`, `happ` |
+| `platform` | `linux` | `MIHOMYAK_PLATFORM` | ОС клиента: `linux`, для `happ` также `windows` и `android` (запросы сняты с настоящих приложений). Многие провайдеры не пускают Linux, но принимают Happ под Windows или Android |
 | `app_version` | версия клиента | `MIHOMYAK_APP_VERSION` | версия эмулируемого клиента |
-| `app_build` | build id Happ | — | Happ: `…/Linux/<build>…` |
+| `app_build` | build id Happ | — | Happ: `…/<ОС>/<build>…` (под текущую платформу и версию) |
 | `core_version` | `v1.19.28` | — | FlClashX: `core/<ver>` в UA и `global-ua` |
 | `user_agent` | по клиенту | `MIHOMYAK_USER_AGENT` | заменить только значение UA |
 | `headers` | `[]` | — | `["Name: value"]`: добавить или заменить заголовки (имя — токен HTTP; у FlClashX порядок пересчитывается, как в dart:io) |
@@ -112,11 +113,14 @@ cron работает как Vixie cron: если заданы и день ме�
 | `machine_id` | из `seed`, иначе генерируется в `<data>/machine-id` | `MIHOMYAK_MACHINE_ID` | зерно HWID (как `/etc/machine-id`); вместе с `seed` задать нельзя |
 | `hwid` | по формуле клиента | `MIHOMYAK_HWID` | итоговый `x-hwid` как есть |
 | `os_release` | `/etc/os-release` | `MIHOMYAK_OS_RELEASE` | откуда брать дистрибутив |
-| `hostname` | hostname ядра | `MIHOMYAK_HOSTNAME` | Happ: `X-Device-Model: <hostname>_<arch>` |
+| `hostname` | hostname ядра; для Windows `DESKTOP-XXXXXXX` из machine-id | `MIHOMYAK_HOSTNAME` | Happ: `X-Device-Model: <hostname>_<arch>` |
+| `os_version` | Windows `11_10.0.26100`, Android `14` | — | версия ОС, которую сообщает Happ под Windows/Android (`X-Ver-Os`) |
+| `model` | `SM-S921B` | — | модель телефона для Happ под Android (`X-Device-model`) |
 | `locale` | `en` | `MIHOMYAK_LOCALE` | Happ: `X-Device-Locale`, `Accept-Language` |
 
 Формулы HWID: FlClashX — `sha256(machine-id)[:16]` в верхнем регистре, Koala —
-то же в нижнем, Happ — сырой machine-id. HWID проверяется регуляркой Remnawave
+то же в нижнем, Happ — сырой machine-id; Happ под Windows — `MachineGuid` (UUID из machine-id),
+под Android — 16 hex (`ANDROID_ID` из machine-id). HWID проверяется регуляркой Remnawave
 `^[a-zA-Z0-9=-]{10,64}$`.
 
 ## `[core]` — mihomo

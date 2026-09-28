@@ -4,6 +4,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
 
 ## [Unreleased]
 
+### Added
+- **Happ for Windows and Android.** `platform = "windows" | "android"`
+  (`MIHOMYAK_PLATFORM`, installer `--platform`) makes the `happ` client send
+  exactly what the real apps send: requests of Happ for Windows 4.2.1–4.4.8
+  (x64 and arm64) and Happ for Android 4.4.1/4.6.0 were captured on GitHub
+  runners and an Android emulator (`.github/workflows/capture.yml`). Many
+  providers refuse Linux but accept these. The Windows MachineGuid and
+  computer name and the Android ID are derived from the seed; `device.model`
+  and `device.os_version` change the reported phone and OS version.
+  `fetch`/`identity` take `--platform`. The installer asks for it when Happ is
+  chosen.
+
 ### Removed
 - `subscription.accept_stub` / `MIHOMYAK_ACCEPT_STUB`: a provider stub is never
   applied now, only ever refused.

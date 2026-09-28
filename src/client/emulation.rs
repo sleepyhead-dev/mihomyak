@@ -969,8 +969,14 @@ mod tests {
         assert!(groups[2].starts_with('4'), "version 4: {guid}");
         assert!(matches!(groups[3].as_bytes()[0], b'8' | b'9' | b'a' | b'b'));
         assert!(guid.bytes().all(|b| b == b'-' || hex(b)));
-        assert_eq!(guid, windows_machine_guid("0d0af05ee8fd4dc29275718f2ce4dff1"));
-        assert_ne!(guid, windows_machine_guid("11112222333344445555666677778888"));
+        assert_eq!(
+            guid,
+            windows_machine_guid("0d0af05ee8fd4dc29275718f2ce4dff1")
+        );
+        assert_ne!(
+            guid,
+            windows_machine_guid("11112222333344445555666677778888")
+        );
         assert!(is_valid_hwid(&guid));
 
         let name = windows_computer_name("0d0af05ee8fd4dc29275718f2ce4dff1");

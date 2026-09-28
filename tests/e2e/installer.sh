@@ -41,13 +41,23 @@ fail() {
 
 for mode in gateway proxy; do
   step "Docker $mode"
+  # The proxy run also installs Happ for Windows, the typical choice when a
+  # provider refuses Linux.
+  extra=()
+  [[ $mode == proxy ]] && extra=(--client happ --platform windows)
   sh deploy/install.sh --yes --mode "$mode" --url "http://$host_ip:$port/sub/$mode" \
-    --from deploy/docker --image "$image" --dir "$dir" || fail "install ($mode)"
+    --from deploy/docker --image "$image" --dir "$dir" "${extra[@]}" || fail "install ($mode)"
   [[ $(stat -c %a "$dir/.env") == 600 ]] || fail ".env is not private"
   grep -Eq '^MIHOMYAK_DEVICE_SEED=[0-9a-f]{24}$' "$dir/.env" || fail "no generated seed"
   status=$(mihomyak status) || fail "the mihomyak command on the host"
   grep -q 'Mock VPN' <<<"$status" || fail "status: $status"
   ok "installed, healthy, the host command works"
+  if [[ $mode == proxy ]]; then
+    identity=$(mihomyak identity) || fail "identity"
+    grep -q 'client:        happ on windows' <<<"$identity" || fail "identity: $identity"
+    grep -q 'User-Agent: Happ/4.3.0/Windows/' <<<"$identity" || fail "identity: $identity"
+    ok "Happ for Windows"
+  fi
   sh deploy/install.sh update --yes >/dev/null || fail "update ($mode)"
   ok "update"
   sh deploy/install.sh uninstall --purge --yes >/dev/null || fail "uninstall ($mode)"

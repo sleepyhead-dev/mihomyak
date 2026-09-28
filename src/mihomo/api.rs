@@ -95,7 +95,11 @@ impl Api {
         } else {
             format!("{host}:{port}")
         };
-        let endpoint = Endpoint::Tcp { host, port, tls: false };
+        let endpoint = Endpoint::Tcp {
+            host,
+            port,
+            tls: false,
+        };
         let host = host_header;
         let client = Client {
             connect_timeout: Duration::from_secs(3),

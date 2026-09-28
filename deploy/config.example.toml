@@ -13,6 +13,9 @@ url = "https://sub.example.com/REPLACE_ME"
 #   koala    — Koala Clash 1.4.1
 #   happ     — Happ Desktop 4.3.0 (panel answers with links or Xray JSON)
 client = "flclashx"
+# The OS the client runs on: linux (default); for happ also windows or android
+# (many providers refuse Linux but accept Happ for Windows or Android).
+# platform = "windows"
 # app_version = "0.4.2"          # follow a newer client release without rebuilding
 # app_build = "2609151457"       # Happ: build id in the UA (x64; arm64 ends in …456)
 # core_version = "v1.19.28"      # FlClashX: core/<ver> in the UA and mihomo global-ua
