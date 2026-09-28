@@ -4,6 +4,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
 
 ## [Unreleased]
 
+### Fixed
+- `status`, `fetch` and the supervisor log no longer print the subscription
+  token when the panel echoes the link back (`profile-web-page-url`,
+  `fallback-url`, `announce-url`, announcements): it is masked like the URL.
+- Hysteria2 nodes whose xray `finalmask` holds only `quicParams` no longer get
+  a false "obfs/port hopping not converted" warning; they work as converted.
+
 ## [0.4.0] - 2026-09-28
 
 ### Added

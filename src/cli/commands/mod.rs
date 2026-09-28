@@ -12,7 +12,7 @@ use crate::cli::{Cli, Command};
 use crate::client::emulation::{ClientKind, Platform};
 use crate::config::Config;
 use crate::mihomo::api::Api;
-use crate::subscription::ProviderInfo;
+use crate::subscription::{ProviderInfo, redact_in};
 use crate::util::{fmt_bytes, fmt_date, fmt_duration, now_unix, sanitize};
 
 pub fn run(cli: Cli) -> Result<ExitCode> {
@@ -106,8 +106,12 @@ fn fmt_delay(delay: Option<&u32>) -> String {
     }
 }
 
-fn print_provider(info: &ProviderInfo) {
-    let row = |label: &str, value: &str| println!("{label:<13} {}", sanitize(value));
+/// Provider info from the panel's headers; `urls` are the subscription URLs whose
+/// tokens providers echo back (web page, announcements) and must stay masked.
+fn print_provider(info: &ProviderInfo, urls: &[&str]) {
+    let row = |label: &str, value: &str| {
+        println!("{label:<13} {}", sanitize(&redact_in(value, urls)));
+    };
     if let Some(title) = &info.title {
         row("title:", title);
     }

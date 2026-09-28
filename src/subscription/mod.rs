@@ -189,6 +189,33 @@ pub fn redact(url: &Url) -> String {
     format!("{}://{}/…{tail}", url.scheme.as_str(), url.host_header())
 }
 
+/// Masks the secret parts of the subscription URLs in text from the panel:
+/// providers echo the link back in `profile-web-page-url`, `fallback-url`,
+/// `announce-url` and announcements.
+pub fn redact_in(text: &str, urls: &[&str]) -> String {
+    let mut out = text.to_owned();
+    for secret in urls.iter().flat_map(|url| secrets(url)) {
+        let tail: String = secret.chars().skip(secret.chars().count() - 4).collect();
+        out = out.replace(secret, &format!("…{tail}"));
+    }
+    out
+}
+
+/// Path segments and query values that look like tokens: 8+ characters with a
+/// digit or mixed case (`r2TReK2sLtYvCzk0`, a UUID), not words like `subscription`.
+fn secrets(url: &str) -> impl Iterator<Item = &str> {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let target = rest.find('/').map_or("", |i| &rest[i..]);
+    target
+        .split(['/', '?', '&', '=', '#'])
+        .filter(|part| {
+            let has = |f: fn(&char) -> bool| part.chars().any(|c| f(&c));
+            part.chars().count() >= 8
+                && (has(char::is_ascii_digit)
+                    || has(char::is_ascii_uppercase) && has(char::is_ascii_lowercase))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,5 +298,27 @@ mod tests {
     fn redacts_tokens() {
         let url = Url::parse("https://sub.example.com/api/sub/AbCdEfGh1234?x=1").unwrap();
         assert_eq!(redact(&url), "https://sub.example.com/…1234");
+    }
+
+    #[test]
+    fn redacts_tokens_echoed_by_the_panel() {
+        let urls = [
+            "https://a.example.shop/cart/r2TReK2sLtYvCzk0",
+            "https://moved.example.com/sub/4/5f35bd8a-8d50-400f-a6ed-f364372fd3f2?key=Secret99",
+        ];
+        assert_eq!(
+            redact_in("https://a.example.shop/cart/r2TReK2sLtYvCzk0", &urls),
+            "https://a.example.shop/cart/…Czk0"
+        );
+        assert_eq!(
+            redact_in(
+                "https://mirror.example.net/sub/5f35bd8a-8d50-400f-a6ed-f364372fd3f2?key=Secret99",
+                &urls
+            ),
+            "https://mirror.example.net/sub/…f3d2?key=…et99"
+        );
+        // Words and short segments stay readable.
+        let plain = "Renew at https://example.com/subscription/cart/4";
+        assert_eq!(redact_in(plain, &urls), plain);
     }
 }

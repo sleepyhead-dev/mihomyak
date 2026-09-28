@@ -242,6 +242,8 @@ impl Supervisor {
                     describe_next(next)
                 );
                 if let Some(announce) = &info.announce {
+                    let urls = [self.updater.config.subscription_url().unwrap_or_default()];
+                    let announce = crate::subscription::redact_in(announce, &urls);
                     crate::info!("provider announcement: {announce}");
                 }
                 if changed && !self.reload_core() {
