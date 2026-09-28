@@ -4,6 +4,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
 
 ## [Unreleased]
 
+### Removed
+- `subscription.accept_stub` / `MIHOMYAK_ACCEPT_STUB`: a provider stub is never
+  applied now, only ever refused.
+- The `custom` client kind. Use `flclashx`, `koala` or `happ`; the
+  `subscription.user_agent` override still works with any of them.
+- `device.send_headers`: the `x-hwid`/`x-device-*` headers are always sent.
+- `device.os_name`, `device.os_version`, `device.os_pretty_name` overrides.
+  `device.os_release` (the file path) is unchanged.
+- The unix-socket mihomo controller (`core.controller = "unix:/path"`).
+  `core.controller` is always `host:port` now.
+- `gateway.dns_listen`: mihomo's DNS server always listens on the fixed
+  `127.0.0.1:1053`.
+
 ## [0.3.0] - 2026-09-28
 
 ### Added

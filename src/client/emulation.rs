@@ -176,8 +176,6 @@ pub enum ClientKind {
     Koala,
     /// Happ Desktop (Qt, xray core): panels answer with share links or Xray JSON.
     Happ,
-    /// Generic client; requires an explicit User-Agent.
-    Custom,
 }
 
 impl std::str::FromStr for ClientKind {
@@ -188,8 +186,7 @@ impl std::str::FromStr for ClientKind {
             "flclashx" | "flclash-x" | "flclash_x" => Self::FlClashX,
             "koala" | "koala-clash" | "koala_clash" => Self::Koala,
             "happ" => Self::Happ,
-            "custom" => Self::Custom,
-            _ => bail!("unknown client {s:?}: expected flclashx, koala, happ or custom"),
+            _ => bail!("unknown client {s:?}: expected flclashx, koala or happ"),
         })
     }
 }
@@ -208,7 +205,6 @@ impl std::fmt::Display for ClientKind {
             Self::FlClashX => "flclashx",
             Self::Koala => "koala",
             Self::Happ => "happ",
-            Self::Custom => "custom",
         })
     }
 }
@@ -231,16 +227,12 @@ pub struct Emulation {
     user_agent: Option<String>,
     extra_headers: Vec<(String, String)>,
     hwid_override: Option<String>,
-    send_device_headers: bool,
     identity: Identity,
 }
 
 impl Emulation {
     pub fn new(config: &Config, identity: Identity) -> Result<Self> {
         let sub = &config.subscription;
-        if sub.client == ClientKind::Custom && sub.user_agent.is_none() {
-            bail!("client \"custom\" needs subscription.user_agent (MIHOMYAK_USER_AGENT)");
-        }
         let default_version = match sub.client {
             ClientKind::Koala => KOALA_VERSION,
             ClientKind::Happ => HAPP_VERSION,
@@ -269,11 +261,10 @@ impl Emulation {
             user_agent: sub.user_agent.clone(),
             extra_headers,
             hwid_override: config.device.hwid.clone(),
-            send_device_headers: config.device.send_headers,
             identity,
         };
         let hwid = emulation.device_headers().hwid;
-        if emulation.send_device_headers && !is_valid_hwid(&hwid) {
+        if !is_valid_hwid(&hwid) {
             crate::warn!(
                 "HWID {hwid:?} does not match ^[a-zA-Z0-9=-]{{10,64}}$; Remnawave will treat it as missing"
             );
@@ -305,7 +296,6 @@ impl Emulation {
                 self.app_build,
                 happ_day_marker(unix)
             ),
-            ClientKind::Custom => unreachable!("validated in Emulation::new"),
         }
     }
 
@@ -344,7 +334,7 @@ impl Emulation {
                 model: format!("{}_{}", id.hostname, qt_cpu_arch()),
             },
             // src/main/utils/deviceInfo.ts (linux branches)
-            ClientKind::Koala | ClientKind::Custom => {
+            ClientKind::Koala => {
                 let name = id.os.koala_get("NAME");
                 let version = id.os.koala_get("VERSION_ID");
                 let os_version = match (&name, &version) {
@@ -383,7 +373,7 @@ impl Emulation {
     fn build_headers(&self, url: &Url) -> Vec<(String, String)> {
         let host = url.host_header();
         let ua = self.user_agent();
-        let dev = self.send_device_headers.then(|| self.device_headers());
+        let dev = self.device_headers();
         let mut headers: Vec<(&str, String)> = Vec::with_capacity(10);
         match self.kind {
             ClientKind::FlClashX => return self.flclashx_headers(host, ua, dev),
@@ -391,12 +381,10 @@ impl Emulation {
                 // axios 1.x on Node 22: defaults, user headers, then http module's.
                 headers.push(("Accept", "application/json, text/plain, */*".into()));
                 headers.push(("User-Agent", ua));
-                if let Some(d) = &dev {
-                    headers.push(("x-hwid", d.hwid.clone()));
-                    headers.push(("x-device-os", d.os.clone()));
-                    headers.push(("x-ver-os", d.os_version.clone().unwrap_or_default()));
-                    headers.push(("x-device-model", d.model.clone()));
-                }
+                headers.push(("x-hwid", dev.hwid.clone()));
+                headers.push(("x-device-os", dev.os.clone()));
+                headers.push(("x-ver-os", dev.os_version.clone().unwrap_or_default()));
+                headers.push(("x-device-model", dev.model.clone()));
                 headers.push(("Accept-Encoding", "gzip, compress, deflate, br".into()));
                 headers.push(("Host", host));
                 headers.push(("Connection", "keep-alive".into()));
@@ -409,30 +397,13 @@ impl Emulation {
                 headers.push(("User-Agent", ua));
                 headers.push(("X-App-Version", self.app_version.clone()));
                 headers.push(("X-Device-Locale", locale));
-                if let Some(d) = &dev {
-                    headers.push(("X-Device-Os", d.os.clone()));
-                    headers.push(("X-Device-Model", d.model.clone()));
-                    headers.push(("X-Hwid", d.hwid.clone()));
-                    headers.push(("X-Ver-Os", d.os_version.clone().unwrap_or_default()));
-                }
+                headers.push(("X-Device-Os", dev.os.clone()));
+                headers.push(("X-Device-Model", dev.model.clone()));
+                headers.push(("X-Hwid", dev.hwid.clone()));
+                headers.push(("X-Ver-Os", dev.os_version.clone().unwrap_or_default()));
                 headers.push(("Connection", "Keep-Alive".into()));
                 headers.push(("Accept-Encoding", "zstd, br, gzip, deflate".into()));
                 headers.push(("Accept-Language", accept_language));
-            }
-            ClientKind::Custom => {
-                headers.push(("Host", host));
-                headers.push(("User-Agent", ua));
-                headers.push(("Accept", "*/*".into()));
-                headers.push(("Accept-Encoding", "gzip, deflate, br".into()));
-                if let Some(d) = &dev {
-                    headers.push(("x-hwid", d.hwid.clone()));
-                    headers.push(("x-device-os", d.os.clone()));
-                    if let Some(v) = &d.os_version {
-                        headers.push(("x-ver-os", v.clone()));
-                    }
-                    headers.push(("x-device-model", d.model.clone()));
-                }
-                headers.push(("Connection", "close".into()));
             }
         }
         let mut out: Vec<(String, String)> = headers
@@ -456,20 +427,18 @@ impl Emulation {
         &self,
         host: String,
         ua: String,
-        dev: Option<DeviceHeaders>,
+        dev: DeviceHeaders,
     ) -> Vec<(String, String)> {
         let mut values: Vec<(String, String)> = vec![
             ("host".into(), host),
             ("accept-encoding".into(), "gzip".into()),
             ("user-agent".into(), ua),
+            ("x-hwid".into(), dev.hwid),
+            ("x-device-os".into(), dev.os),
+            ("x-device-model".into(), dev.model),
         ];
-        if let Some(d) = dev {
-            values.push(("x-hwid".into(), d.hwid));
-            values.push(("x-device-os".into(), d.os));
-            values.push(("x-device-model".into(), d.model));
-            if let Some(v) = d.os_version {
-                values.push(("x-ver-os".into(), v));
-            }
+        if let Some(v) = dev.os_version {
+            values.push(("x-ver-os".into(), v));
         }
         for (name, value) in &self.extra_headers {
             let name = name.to_ascii_lowercase();
@@ -502,9 +471,6 @@ mod tests {
     fn emulation(kind: ClientKind, os: &str) -> Emulation {
         let mut config = Config::default();
         config.subscription.client = kind;
-        if kind == ClientKind::Custom {
-            config.subscription.user_agent = Some("clash-verge/v2.4.0".into());
-        }
         let identity = Identity {
             machine_id: "0d0af05ee8fd4dc29275718f2ce4dff1".into(),
             os: OsRelease::from_raw(os),
@@ -704,38 +670,6 @@ mod tests {
         keys.sort_unstable();
         keys.dedup();
         assert_eq!(keys.len(), 8);
-    }
-
-    #[test]
-    fn device_headers_can_be_disabled() {
-        let mut config = Config::default();
-        config.device.send_headers = false;
-        let identity = Identity {
-            machine_id: "x".into(),
-            os: OsRelease::default(),
-            kernel_release: String::new(),
-            hostname: "vm".into(),
-            locale: "en".into(),
-        };
-        let e = Emulation::new(&config, identity).unwrap();
-        let h = e.headers(&Url::parse("https://s.example/a").unwrap());
-        assert!(h.iter().all(|(k, _)| !k.starts_with("x-")));
-    }
-
-    #[test]
-    fn custom_client_needs_user_agent() {
-        let mut config = Config::default();
-        config.subscription.client = ClientKind::Custom;
-        let identity = Identity {
-            machine_id: "x".into(),
-            os: OsRelease::default(),
-            kernel_release: String::new(),
-            hostname: "vm".into(),
-            locale: "en".into(),
-        };
-        assert!(Emulation::new(&config, identity).is_err());
-        let e = emulation(ClientKind::Custom, UBUNTU);
-        assert_eq!(e.user_agent(), "clash-verge/v2.4.0");
     }
 
     #[test]

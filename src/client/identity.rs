@@ -34,16 +34,7 @@ impl Identity {
         if machine_id.is_empty() {
             bail!("device.machine_id is empty");
         }
-        let mut os = OsRelease::read(&config.device.os_release);
-        if let Some(v) = &config.device.os_name {
-            os.set("NAME", v);
-        }
-        if let Some(v) = &config.device.os_version {
-            os.set("VERSION_ID", v);
-        }
-        if let Some(v) = &config.device.os_pretty_name {
-            os.set("PRETTY_NAME", v);
-        }
+        let os = OsRelease::read(&config.device.os_release);
         let kernel_release = std::fs::read_to_string("/proc/sys/kernel/osrelease")
             .map(|s| s.trim().to_owned())
             .unwrap_or_default();
@@ -73,8 +64,6 @@ pub struct OsRelease {
     fallback: Option<String>,
     /// `/etc/lsb-release` (device_info_plus falls back to its `DISTRIB_*` keys).
     lsb: Option<String>,
-    /// `[device] os_*` overrides; win for every parser.
-    overrides: Vec<(String, String)>,
 }
 
 impl OsRelease {
@@ -84,7 +73,6 @@ impl OsRelease {
             primary: std::fs::read_to_string(path).ok(),
             fallback: read("/usr/lib/os-release"),
             lsb: read("/etc/lsb-release"),
-            overrides: Vec::new(),
         }
     }
 
@@ -100,14 +88,6 @@ impl OsRelease {
         self
     }
 
-    fn overridden(&self, key: &str) -> Option<String> {
-        self.overrides
-            .iter()
-            .rev()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| v.clone())
-    }
-
     fn effective(&self) -> Option<&str> {
         self.primary.as_deref().or(self.fallback.as_deref())
     }
@@ -115,9 +95,6 @@ impl OsRelease {
     /// Value per the os-release spec (systemd, Qt): `KEY=value`, optionally
     /// single/double quoted; the last assignment wins.
     pub fn get(&self, key: &str) -> Option<String> {
-        if let Some(v) = self.overridden(key) {
-            return Some(v);
-        }
         self.effective()?.lines().rev().find_map(|line| {
             let value = line.trim().strip_prefix(key)?.strip_prefix('=')?.trim();
             let unquoted = ['"', '\'']
@@ -133,9 +110,6 @@ impl OsRelease {
     /// (prefix and suffix independently), nothing is trimmed, the last line wins.
     /// An empty value stays `Some("")`.
     pub fn dip_get(&self, key: &str) -> Option<String> {
-        if let Some(v) = self.overridden(key) {
-            return Some(v);
-        }
         dip_lookup(self.effective()?, key)
     }
 
@@ -148,19 +122,12 @@ impl OsRelease {
     /// `/usr/lib` fallback): first match wins, the value stops at a double quote,
     /// single quotes are kept verbatim.
     pub fn koala_get(&self, key: &str) -> Option<String> {
-        if let Some(v) = self.overridden(key) {
-            return Some(v);
-        }
         self.primary.as_deref()?.lines().find_map(|line| {
             let value = line.strip_prefix(key)?.strip_prefix('=')?;
             let value = value.strip_prefix('"').unwrap_or(value);
             let end = value.find('"').unwrap_or(value.len());
             Some(value[..end].to_owned()).filter(|v| !v.is_empty())
         })
-    }
-
-    fn set(&mut self, key: &str, value: &str) {
-        self.overrides.push((key.to_owned(), value.to_owned()));
     }
 }
 
@@ -258,15 +225,6 @@ ID=ubuntu
             None,
             "Koala reads /etc only"
         );
-    }
-
-    #[test]
-    fn overrides_fields() {
-        let mut os = OsRelease::from_raw(UBUNTU);
-        os.set("NAME", "Debian GNU/Linux");
-        assert_eq!(os.get("NAME").as_deref(), Some("Debian GNU/Linux"));
-        assert_eq!(os.koala_get("NAME").as_deref(), Some("Debian GNU/Linux"));
-        assert_eq!(os.get("VERSION_ID").as_deref(), Some("24.04"));
     }
 
     #[test]

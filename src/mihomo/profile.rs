@@ -851,7 +851,7 @@ fn apply_gateway(map: &mut Mapping, config: &Config, params: &Params<'_>) {
         );
     }
     set(dns, "enable", true);
-    set(dns, "listen", gw.dns_listen.as_str());
+    set(dns, "listen", "127.0.0.1:1053");
     if !dns.contains_key("enhanced-mode") {
         set(dns, "enhanced-mode", "fake-ip");
         set(dns, "fake-ip-range", "198.18.0.1/16");
@@ -897,10 +897,7 @@ fn apply_gateway(map: &mut Mapping, config: &Config, params: &Params<'_>) {
 fn apply_controller(map: &mut Mapping, config: &Config, secret: &str) {
     map.remove("external-controller");
     map.remove("external-controller-unix");
-    match config.core.controller.strip_prefix("unix:") {
-        Some(path) => set(map, "external-controller-unix", path),
-        None => set(map, "external-controller", config.core.controller.as_str()),
-    }
+    set(map, "external-controller", config.core.controller.as_str());
     set(map, "secret", secret);
 }
 
@@ -1173,10 +1170,11 @@ rules:
         let mut config: Config = toml::from_str(
             r#"
             [core]
-            controller = "unix:/data/mihomo.sock"
+            controller = "127.0.0.1:9999"
             [mihomo]
             mode = "rule"
             secret = "hijack"
+            external-controller = "127.0.0.1:1234"
             dns = { ipv6 = true }
             profile = { store-selected = false }
             "#,
@@ -1189,11 +1187,7 @@ rules:
         assert_eq!(v["dns"]["enhanced-mode"].as_str(), Some("redir-host"));
         assert_eq!(v["profile"]["store-selected"].as_bool(), Some(false));
         assert_eq!(v["secret"].as_str(), Some("s3cret"));
-        assert_eq!(
-            v["external-controller-unix"].as_str(),
-            Some("/data/mihomo.sock")
-        );
-        assert!(v.get("external-controller").is_none());
+        assert_eq!(v["external-controller"].as_str(), Some("127.0.0.1:9999"));
         assert!(v.get("global-ua").is_none(), "only FlClashX pins global-ua");
     }
 

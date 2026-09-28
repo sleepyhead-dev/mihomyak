@@ -1,7 +1,6 @@
 //! Client for mihomo's REST API (external-controller).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -76,46 +75,35 @@ impl Api {
         Self::new(&config.core.controller, &secret)
     }
 
-    /// `controller` is `host:port` or `unix:/path` (same syntax as `core.controller`).
+    /// `controller` is `host:port` (same syntax as `core.controller`).
     pub fn new(controller: &str, secret: &str) -> Result<Self> {
-        let (endpoint, host) = match controller.strip_prefix("unix:") {
-            Some(path) => (Endpoint::Unix(PathBuf::from(path)), "localhost".to_owned()),
-            None => {
-                let (host, port) = controller
-                    .rsplit_once(':')
-                    .with_context(|| format!("controller {controller:?} must be host:port"))?;
-                let port: u16 = port
-                    .parse()
-                    .with_context(|| format!("bad controller port {port:?}"))?;
-                // A wildcard listen address is reachable via loopback.
-                let host = match host.trim_matches(['[', ']']) {
-                    "" | "0.0.0.0" | "*" => "127.0.0.1",
-                    "::" => "::1",
-                    h => h,
-                }
-                .to_owned();
-                let host_header = if host.contains(':') {
-                    format!("[{host}]:{port}")
-                } else {
-                    format!("{host}:{port}")
-                };
-                (
-                    Endpoint::Tcp {
-                        host,
-                        port,
-                        tls: false,
-                    },
-                    host_header,
-                )
-            }
+        let (host, port) = controller
+            .rsplit_once(':')
+            .with_context(|| format!("controller {controller:?} must be host:port"))?;
+        let port: u16 = port
+            .parse()
+            .with_context(|| format!("bad controller port {port:?}"))?;
+        // A wildcard listen address is reachable via loopback.
+        let host = match host.trim_matches(['[', ']']) {
+            "" | "0.0.0.0" | "*" => "127.0.0.1",
+            "::" => "::1",
+            h => h,
+        }
+        .to_owned();
+        let host_header = if host.contains(':') {
+            format!("[{host}]:{port}")
+        } else {
+            format!("{host}:{port}")
         };
+        let endpoint = Endpoint::Tcp { host, port, tls: false };
+        let host = host_header;
         let client = Client {
             connect_timeout: Duration::from_secs(3),
             io_timeout: Duration::from_secs(30),
             total_timeout: Duration::from_secs(60),
             proxy: None,
             max_body: 16 * 1024 * 1024,
-            // Loopback or a unix socket: never subject to the kill switch.
+            // Loopback: never subject to the kill switch.
             mark: None,
         };
         Ok(Self {
@@ -362,10 +350,6 @@ mod tests {
         assert_eq!(api.host, "127.0.0.1:9090");
         let api = Api::new("[::]:9090", "").unwrap();
         assert_eq!(api.host, "[::1]:9090");
-        assert!(matches!(
-            Api::new("unix:/tmp/m.sock", "").unwrap().endpoint,
-            Endpoint::Unix(_)
-        ));
         assert!(Api::new("nonsense", "").is_err());
     }
 }

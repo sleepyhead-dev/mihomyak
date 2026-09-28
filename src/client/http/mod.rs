@@ -19,8 +19,7 @@ mod url;
 
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
-use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -34,7 +33,6 @@ pub use url::{Scheme, Url};
 #[derive(Clone, Debug)]
 pub enum Endpoint {
     Tcp { host: String, port: u16, tls: bool },
-    Unix(PathBuf),
 }
 
 impl From<&Url> for Endpoint {
@@ -116,11 +114,6 @@ impl Client {
 
     fn connect(&self, endpoint: &Endpoint, deadline: Instant) -> Result<(Inner, Option<IpAddr>)> {
         match endpoint {
-            Endpoint::Unix(path) => {
-                let sock = UnixStream::connect(path)
-                    .with_context(|| format!("connect {}", path.display()))?;
-                Ok((Inner::Unix(sock), None))
-            }
             Endpoint::Tcp { host, port, tls } => {
                 let (tcp, peer) = match &self.proxy {
                     Some(proxy) => (self.tunnel(proxy, host, *port, deadline)?, None),
@@ -325,7 +318,6 @@ fn remaining(deadline: Instant) -> io::Result<Duration> {
 enum Inner {
     Tcp(TcpStream),
     Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
-    Unix(UnixStream),
 }
 
 /// A connection whose socket timeouts are re-armed before every read and write, so
@@ -347,10 +339,6 @@ impl Stream {
             Inner::Tls(s) => {
                 s.sock.set_read_timeout(timeout)?;
                 s.sock.set_write_timeout(timeout)
-            }
-            Inner::Unix(s) => {
-                s.set_read_timeout(timeout)?;
-                s.set_write_timeout(timeout)
             }
         }
     }
@@ -385,7 +373,6 @@ impl Read for Stream {
         let result = match &mut self.inner {
             Inner::Tcp(s) => s.read(buf),
             Inner::Tls(s) => s.read(buf),
-            Inner::Unix(s) => s.read(buf),
         };
         result.map_err(|e| self.timed_out(e))
     }
@@ -397,7 +384,6 @@ impl Write for Stream {
         let result = match &mut self.inner {
             Inner::Tcp(s) => s.write(buf),
             Inner::Tls(s) => s.write(buf),
-            Inner::Unix(s) => s.write(buf),
         };
         result.map_err(|e| self.timed_out(e))
     }
@@ -407,7 +393,6 @@ impl Write for Stream {
         let result = match &mut self.inner {
             Inner::Tcp(s) => s.flush(),
             Inner::Tls(s) => s.flush(),
-            Inner::Unix(s) => s.flush(),
         };
         result.map_err(|e| self.timed_out(e))
     }
@@ -460,9 +445,19 @@ mod tests {
         assert_eq!(closed.kind(), io::ErrorKind::ConnectionRefused);
     }
 
+    /// An in-memory-like connected pair, for tests that only need a stream to
+    /// read and write on (not real network conditions).
+    fn tcp_pair() -> (TcpStream, TcpStream) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        (client, server)
+    }
+
     #[test]
     fn total_deadline_stops_a_trickling_server() {
-        let (client, mut server) = UnixStream::pair().unwrap();
+        let (client, mut server) = tcp_pair();
         let writer = std::thread::spawn(move || {
             let _ = server.write_all(b"HTTP/1.1 200 OK\r\n");
             for _ in 0..100 {
@@ -473,7 +468,7 @@ mod tests {
             }
         });
         let mut stream = Stream {
-            inner: Inner::Unix(client),
+            inner: Inner::Tcp(client),
             deadline: Instant::now() + Duration::from_millis(200),
             io_timeout: Duration::from_secs(5),
         };
@@ -487,9 +482,9 @@ mod tests {
     #[test]
     fn timeouts_name_what_ran_out() {
         let read = |deadline, io_timeout| {
-            let (client, _server) = UnixStream::pair().unwrap();
+            let (client, _server) = tcp_pair();
             let mut stream = Stream {
-                inner: Inner::Unix(client),
+                inner: Inner::Tcp(client),
                 deadline: Instant::now() + deadline,
                 io_timeout,
             };

@@ -53,8 +53,6 @@ pub struct Subscription {
     pub headers: Vec<String>,
     /// Fetch through an HTTP proxy (`http://host:port`, tunnelled with CONNECT).
     pub proxy: Option<String>,
-    /// Apply configs even when they look like a provider stub.
-    pub accept_stub: bool,
 }
 
 impl Default for Subscription {
@@ -68,7 +66,6 @@ impl Default for Subscription {
             user_agent: None,
             headers: Vec::new(),
             proxy: None,
-            accept_stub: false,
         }
     }
 }
@@ -262,14 +259,8 @@ pub struct Device {
     pub seed: Option<String>,
     /// Final `x-hwid` value, bypassing the client-specific derivation.
     pub hwid: Option<String>,
-    /// Send the `x-hwid`/`x-device-*` headers (FlClashX "send device headers" toggle).
-    pub send_headers: bool,
     /// os-release file describing the emulated desktop.
     pub os_release: PathBuf,
-    /// Overrides for individual os-release fields.
-    pub os_name: Option<String>,
-    pub os_version: Option<String>,
-    pub os_pretty_name: Option<String>,
     /// Hostname reported by Happ (`X-Device-Model: <hostname>_<arch>`).
     /// Default: the kernel hostname (in Docker set `hostname:` in compose).
     pub hostname: Option<String>,
@@ -283,11 +274,7 @@ impl Default for Device {
             machine_id: None,
             seed: None,
             hwid: None,
-            send_headers: true,
             os_release: PathBuf::from("/etc/os-release"),
-            os_name: None,
-            os_version: None,
-            os_pretty_name: None,
             hostname: None,
             locale: "en".into(),
         }
@@ -299,7 +286,7 @@ impl Default for Device {
 pub struct Core {
     /// mihomo executable (name looked up in PATH, or a path).
     pub bin: PathBuf,
-    /// `host:port` or `unix:/path/to/socket` for mihomo's REST API.
+    /// `host:port` for mihomo's REST API.
     pub controller: String,
     /// API secret. Default: generated once and stored in the data directory.
     pub secret: Option<String>,
@@ -364,9 +351,6 @@ pub struct Gateway {
     pub stack: String,
     /// nftables-based redirect for TCP (faster, needs nf_tables in the kernel).
     pub auto_redirect: bool,
-    /// Where mihomo's DNS server listens. TUN hijacks port 53 regardless; expose
-    /// it (e.g. `0.0.0.0:1053`) only if LAN clients should query it directly.
-    pub dns_listen: String,
     /// Block traffic that would bypass mihomo while it is down (see `killswitch`).
     pub kill_switch: bool,
     /// Start even though Docker resolves the apps' names outside the tunnel
@@ -380,7 +364,6 @@ impl Default for Gateway {
             enable: false,
             stack: "system".into(),
             auto_redirect: false,
-            dns_listen: "127.0.0.1:1053".into(),
             kill_switch: false,
             allow_dns_leak: false,
         }
@@ -601,9 +584,6 @@ mod tests {
         assert!(config.validate().is_ok());
 
         config.core.controller = "localhost:9090".into();
-        assert!(config.validate().is_ok());
-
-        config.core.controller = "unix:/run/mihomyak/mihomo.sock".into();
         assert!(config.validate().is_ok());
     }
 

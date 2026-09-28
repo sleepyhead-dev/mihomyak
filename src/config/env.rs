@@ -35,9 +35,6 @@ impl Config {
         if let Some(v) = env("MIHOMYAK_FETCH_PROXY") {
             sub.proxy = Some(v).filter(|s| !s.is_empty());
         }
-        if let Some(v) = flag("MIHOMYAK_ACCEPT_STUB")? {
-            sub.accept_stub = v;
-        }
         let update = &mut self.update;
         if let Some(v) = env("MIHOMYAK_UPDATE_INTERVAL") {
             update.interval = v.parse().context("MIHOMYAK_UPDATE_INTERVAL")?;

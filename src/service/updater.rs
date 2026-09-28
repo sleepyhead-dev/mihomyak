@@ -172,7 +172,7 @@ impl Updater {
 
     fn try_update(&self, meta: &mut SubscriptionMeta) -> Result<Outcome> {
         let (fetch, analysis) = self.fetch()?;
-        let Some(content) = analysis.usable(self.config.subscription.accept_stub) else {
+        let Some(content) = analysis.usable() else {
             let problem = analysis
                 .problem
                 .clone()
@@ -260,7 +260,7 @@ impl Updater {
         let Some((meta, analysis)) = self.cached()? else {
             return Ok(None);
         };
-        // It was accepted when fetched, possibly via accept_stub: don't re-judge it.
+        // It was accepted when fetched: don't re-judge it.
         let Some(content) = analysis.content.as_ref() else {
             return Ok(None);
         };

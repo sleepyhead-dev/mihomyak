@@ -24,14 +24,13 @@
 | Ключ | По умолчанию | Env | Описание |
 |------|--------------|-----|----------|
 | `url` | — | `MIHOMYAK_SUB_URL` | ссылка на подписку (секрет: в логах маскируется) |
-| `client` | `flclashx` | `MIHOMYAK_CLIENT` | `flclashx`, `koala`, `happ`, `custom` |
+| `client` | `flclashx` | `MIHOMYAK_CLIENT` | `flclashx`, `koala`, `happ` |
 | `app_version` | версия клиента | `MIHOMYAK_APP_VERSION` | версия эмулируемого клиента |
 | `app_build` | build id Happ | — | Happ: `…/Linux/<build>…` |
 | `core_version` | `v1.19.28` | — | FlClashX: `core/<ver>` в UA и `global-ua` |
-| `user_agent` | по клиенту | `MIHOMYAK_USER_AGENT` | заменить только значение UA; для `custom` обязателен |
+| `user_agent` | по клиенту | `MIHOMYAK_USER_AGENT` | заменить только значение UA |
 | `headers` | `[]` | — | `["Name: value"]`: добавить или заменить заголовки (имя — токен HTTP; у FlClashX порядок пересчитывается, как в dart:io) |
 | `proxy` | — | `MIHOMYAK_FETCH_PROXY` | качать подписку через `http://host:port` (CONNECT) |
-| `accept_stub` | `false` | `MIHOMYAK_ACCEPT_STUB` | применять конфиги-заглушки |
 
 Значения, которые уходят в заголовки запроса (`user_agent`, `headers`, версии,
 `[device]`), не могут содержать управляющие символы: перевод строки позволил бы
@@ -112,9 +111,7 @@ cron работает как Vixie cron: если заданы и день ме�
 | `seed` | — | `MIHOMYAK_DEVICE_SEED` | любая секретная фраза: из неё выводится machine-id, тот же seed — то же устройство (тот же HWID) на любом сервере |
 | `machine_id` | из `seed`, иначе генерируется в `<data>/machine-id` | `MIHOMYAK_MACHINE_ID` | зерно HWID (как `/etc/machine-id`); вместе с `seed` задать нельзя |
 | `hwid` | по формуле клиента | `MIHOMYAK_HWID` | итоговый `x-hwid` как есть |
-| `send_headers` | `true` | — | слать `x-hwid`/`x-device-*` |
 | `os_release` | `/etc/os-release` | `MIHOMYAK_OS_RELEASE` | откуда брать дистрибутив |
-| `os_name`, `os_version`, `os_pretty_name` | из os-release | — | переопределить `NAME`/`VERSION_ID`/`PRETTY_NAME` |
 | `hostname` | hostname ядра | `MIHOMYAK_HOSTNAME` | Happ: `X-Device-Model: <hostname>_<arch>` |
 | `locale` | `en` | `MIHOMYAK_LOCALE` | Happ: `X-Device-Locale`, `Accept-Language` |
 
@@ -127,7 +124,7 @@ cron работает как Vixie cron: если заданы и день ме�
 | Ключ | По умолчанию | Env | Описание |
 |------|--------------|-----|----------|
 | `bin` | `mihomo` | `MIHOMYAK_CORE_BIN` | путь или имя в PATH (иначе `<data>/bin/mihomo`) |
-| `controller` | `127.0.0.1:9090` | `MIHOMYAK_CONTROLLER` | API mihomo: `host:port` или `unix:/path` |
+| `controller` | `127.0.0.1:9090` | `MIHOMYAK_CONTROLLER` | API mihomo: `host:port` |
 | `secret` | генерируется в `<data>/secret` | `MIHOMYAK_SECRET` | секрет API; пустой запрещён, если API не на loopback |
 | `mixed_port` | `7890` | `MIHOMYAK_MIXED_PORT` | HTTP+SOCKS5 (0 — выключить) |
 | `allow_lan` | `false` | `MIHOMYAK_ALLOW_LAN` | принимать подключения не с loopback |
@@ -146,7 +143,6 @@ cron работает как Vixie cron: если заданы и день ме�
 | `enable` | `false` | `MIHOMYAK_GATEWAY` | TUN + auto-route + перехват DNS |
 | `stack` | `system` | — | `system` (легче всего), `gvisor`, `mixed` |
 | `auto_redirect` | `false` | — | nftables-redirect для TCP (быстрее, нужен nf_tables) |
-| `dns_listen` | `127.0.0.1:1053` | — | DNS mihomo; TUN перехватывает :53 в любом случае |
 | `kill_switch` | `false` (в `compose.gateway.yml` — `1`) | `MIHOMYAK_KILL_SWITCH` | блокировать трафик мимо mihomo, пока тот не работает (см. ниже) |
 | `allow_dns_leak` | `false` | `MIHOMYAK_ALLOW_DNS_LEAK` | стартовать, даже если Docker резолвит имена приложений мимо туннеля (см. [DOCKER.md](DOCKER.md)); иначе шлюз отказывается стартовать |
 
@@ -206,28 +202,8 @@ dns = { nameserver = ["https://1.1.1.1/dns-query"] }
 ## Что mihomyak делает с конфигом провайдера
 
 Подписка — недоверенный вход: провайдер не должен решать, что открыто на вашем
-сервере. Порядок сборки `config.yaml` (`src/mihomo/profile.rs`):
-
-1. берётся YAML подписки (для ссылок — каркас с file-провайдером, для Xray JSON —
-   сконвертированные прокси);
-2. из него остаётся только **белый список** ключей: `proxies`, `proxy-groups`,
-   `proxy-providers`, `rule-providers`, `rules`, `sub-rules`, политика `dns` (без
-   `listen`), `sniffer` и несколько сетевых настроек (`ipv6`, `unified-delay`,
-   `tcp-concurrent`, `keep-alive-*`, `global-client-fingerprint`, `global-ua`,
-   `geodata-*`). Всё остальное (порты, `listeners`, `tunnels`, `tun`, контроллер,
-   `authentication`, `geox-url`, `hosts`, …) отбрасывается, о неожиданных ключах
-   пишется предупреждение;
-3. прокси небезопасных типов (оверлейные сети `tailscale`, `zerotier`, `easytier` и
-   всё неизвестное) удаляются, в провайдерах они исключаются через `exclude-type`;
-   `http`-провайдеры получают путь по умолчанию (провайдер не может перезаписать
-   `config.yaml` или `cache.db`), `file`-провайдеры удаляются;
-4. `[filter]`; все ссылки на удалённые узлы исправляются: группы без узлов
-   получают `DIRECT`, правила на них уходят в `DIRECT`, `dialer-proxy` снимается;
-5. автогруппы (если групп нет) → `[[groups]]` → `[rules]`;
-6. управляемые ключи: порт, LAN, `mode` (клиент владеет режимом, как FlClashX:
-   `mode: global` из шаблона Remnawave игнорируется), `profile.store-selected`,
-   `find-process-mode: off`, `global-ua` для FlClashX;
-7. `[gateway]` (TUN, DNS, обход туннеля для панели);
-8. `[mihomo]`;
-9. контроллер и секрет;
-10. проверка `mihomo -t` перед заменой рабочего конфига.
+сервере. Из неё в итоговый `config.yaml` попадает только **белый список**
+ключей — прокси, группы, правила и политика DNS, — всё остальное (порты,
+`listeners`, `tun`, контроллер и т. п.) отбрасывается. Каждый собранный конфиг
+проверяется настоящим `mihomo -t` перед тем, как заменить рабочий. Полный
+конвейер сборки описан в [ARCHITECTURE.md](dev/ARCHITECTURE.md).

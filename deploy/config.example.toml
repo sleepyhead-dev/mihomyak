@@ -12,7 +12,6 @@ url = "https://sub.example.com/REPLACE_ME"
 #   flclashx — FlClashX 0.4.2 (default; every panel answers with mihomo YAML)
 #   koala    — Koala Clash 1.4.1
 #   happ     — Happ Desktop 4.3.0 (panel answers with links or Xray JSON)
-#   custom   — your own user_agent
 client = "flclashx"
 # app_version = "0.4.2"          # follow a newer client release without rebuilding
 # app_build = "2609151457"       # Happ: build id in the UA (x64; arm64 ends in …456)
@@ -20,7 +19,6 @@ client = "flclashx"
 # user_agent = "…"               # replace only the User-Agent value
 # headers = ["X-Extra: value"]   # add/replace headers (placed as the client would)
 # proxy = "http://127.0.0.1:8080"  # fetch the subscription through an HTTP proxy
-# accept_stub = false            # apply "App not supported"-style placeholder configs
 
 [update]
 # "auto" = provider's profile-update-interval (else 24h) · "off" · or e.g. "6h" (min 5m)
@@ -67,17 +65,13 @@ prepend = [
 # Or reuse another machine's id to keep its device slot (not together with seed):
 # machine_id = "0d0af05ee8fd4dc29275718f2ce4dff1"
 # hwid = "A3B522EAA6F7DD89"      # final x-hwid, bypassing the client formula
-send_headers = true              # x-hwid / x-device-* headers
 os_release = "/etc/os-release"   # distro reported in device headers
-# os_name = "Ubuntu"
-# os_version = "24.04"
-# os_pretty_name = "Ubuntu 24.04.3 LTS"
 # hostname = "home-server"       # Happ: X-Device-Model = <hostname>_<arch>
 locale = "en"                    # Happ: X-Device-Locale / Accept-Language
 
 [core]
 bin = "mihomo"
-controller = "127.0.0.1:9090"    # or "unix:/path/to/mihomo.sock"
+controller = "127.0.0.1:9090"
 # secret = "…"                   # default: generated and stored
 mixed_port = 7890                # HTTP + SOCKS5
 allow_lan = false                # accept other hosts/containers
@@ -96,7 +90,6 @@ mode = "rule"                    # rule | global | direct (`mihomyak mode` persi
 enable = false
 stack = "system"                 # system (lightest) | gvisor | mixed
 auto_redirect = false            # nftables TCP redirect (faster, needs nf_tables)
-dns_listen = "127.0.0.1:1053"
 # Block traffic that would bypass mihomo while it is down (needs iptables and
 # CAP_NET_ADMIN). DNS, private networks and mihomo/mihomyak themselves stay allowed.
 kill_switch = false              # compose.gateway.yml turns it on
