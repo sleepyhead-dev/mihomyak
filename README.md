@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/logo-512.png" alt="mihomyak" width="200">
+
 # mihomyak
 
 **VPN-подписка для сервера: прокси и прозрачный шлюз для Docker-контейнеров**

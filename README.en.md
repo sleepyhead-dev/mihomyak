@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/logo-512.png" alt="mihomyak" width="200">
+
 # mihomyak
 
 **VPN subscription for your server: proxy and transparent gateway for Docker containers**
