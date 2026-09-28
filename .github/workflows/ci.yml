@@ -57,17 +57,20 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64-unknown-linux-musl
-          - aarch64-unknown-linux-musl
-          - armv7-unknown-linux-musleabihf
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+          # Native: the primary target builds and runs its tests on real arm64.
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+          - target: armv7-unknown-linux-musleabihf
+            runner: ubuntu-latest
     env:
-      # The test suite of the ARM targets runs under qemu-user.
-      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUNNER: qemu-aarch64-static
+      # armv7 has no native runner: its test suite runs under qemu-user.
       CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_RUNNER: qemu-arm-static
     steps:
       - uses: actions/checkout@v5
@@ -81,19 +84,18 @@ jobs:
       - run: ./scripts/build-static.sh ${{ matrix.target }}
         env:
           RUSTFLAGS: -D warnings
-      - name: Smoke test (native or qemu)
+      - name: Smoke test
         run: |
           bin="target/${{ matrix.target }}/release/mihomyak"
           case "${{ matrix.target }}" in
-            aarch64-*) run="qemu-aarch64-static $bin" ;;
             armv7-*) run="qemu-arm-static $bin" ;;
             *) run="$bin" ;;
           esac
           $run --version
           $run --help > /dev/null
           ls -l "$bin"
-      # ARM is the primary target: run the whole suite there too (x86_64 runs in `check`).
-      - name: Tests (qemu)
+      # ARM is the primary target: its test suite runs too (x86_64 runs in `check`).
+      - name: Tests
         if: ${{ !startsWith(matrix.target, 'x86_64') }}
         run: ./scripts/build-static.sh ${{ matrix.target }} test
       - uses: actions/upload-artifact@v4
@@ -270,10 +272,12 @@ jobs:
         name: Installer (Docker gateway, Docker proxy, systemd)
         run: ./tests/e2e/installer.sh mihomyak:e2e dist/${{ matrix.arch }}/mihomyak
 
-  # Line coverage of the test suite, reported in the job summary (informational).
+  # Line coverage of the test suite, reported in the job summary (informational,
+  # main only: pull requests get the same tests from `check`).
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v5
