@@ -156,6 +156,7 @@ Settings for a Docker install live in `/opt/mihomyak/.env`; after editing, run
 |------------|------------|
 | `MIHOMYAK_SUB_URL` | the subscription link |
 | `MIHOMYAK_CLIENT` | which client to impersonate: `flclashx` (default), `koala`, `happ` |
+| `MIHOMYAK_PLATFORM` | the client's OS: `linux` (default), for Happ also `windows` or `android` |
 | `MIHOMYAK_DEVICE_SEED` | the phrase the device (HWID) is derived from. Same seed — same device on any server |
 | `MIHOMYAK_UPDATE_CRON` | update schedule, e.g. `0 5 * * *` (time in `TZ`) |
 | `MIHOMYAK_RULES_PRESETS` | `ru-direct`: Russian sites go direct, bypassing the VPN (by default all traffic goes through the VPN) |
@@ -167,14 +168,19 @@ Everything else (auto-switching groups, custom rules, any mihomo keys) is set in
 
 ### Which client to impersonate
 
-| Client | What the panel returns | When to choose it |
-|--------|-------------------|----------------|
-| `flclashx` | mihomo YAML in every panel | almost always |
-| `koala` | YAML or links | if the provider only allows Koala |
-| `happ` | links or Xray JSON (converted) | if the provider only allows Happ |
+| Client | Platform | What the panel returns | When to choose it |
+|--------|----------|------------------------|-------------------|
+| `flclashx` | Linux | mihomo YAML in every panel | if the provider accepts Linux |
+| `koala` | Linux | YAML or links | if the provider only allows Koala |
+| `happ` | Linux, **Windows**, **Android** | links or Xray JSON (converted) | many providers refuse Linux but accept Happ on Windows or Android |
 
-Each client has its own HWID formula, so switching clients means a new device on the
-provider's side. Choose a client once.
+Set the platform with `MIHOMYAK_PLATFORM=windows` or `android`. The Happ for Windows and
+Android requests were captured from the real apps and are reproduced byte for byte.
+`mihomyak fetch --client happ --platform windows` shows what the panel would answer
+without applying anything.
+
+Each client and platform has its own HWID formula, so switching them means a new device
+on the provider's side. Choose once.
 
 ## If something's wrong
 
