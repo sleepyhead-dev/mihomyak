@@ -64,9 +64,7 @@ if (-not $app) { "client not found after install"; exit 1 }
 "client: $app"
 (Get-Item $app).VersionInfo | Format-List | Out-File "$Out\version.txt"
 
-Start-Process $app -ArgumentList $Link
-Start-Sleep 25
-Save-Screen "arg"
+# The protocol handler is how users open such links; the found exe may be a helper.
 Start-Process $Link
 Start-Sleep 25
 Save-Screen "protocol"
