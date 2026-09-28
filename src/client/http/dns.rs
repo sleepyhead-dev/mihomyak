@@ -129,7 +129,11 @@ fn lookup(
 
     let socket = match mark {
         Some(mark) => UdpSocket::from(super::marked_socket(&server, libc::SOCK_DGRAM, mark)?),
-        None => UdpSocket::bind(if server.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" })?,
+        None => UdpSocket::bind(if server.is_ipv4() {
+            "0.0.0.0:0"
+        } else {
+            "[::]:0"
+        })?,
     };
     socket.connect(server)?;
     socket.send(&query)?;
@@ -137,7 +141,10 @@ fn lookup(
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "DNS query timed out"));
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "DNS query timed out",
+            ));
         }
         socket.set_read_timeout(Some(left))?;
         let n = socket.recv(&mut buf)?;
@@ -181,7 +188,12 @@ fn lookup_tcp(
 }
 
 fn encode_query(id: u16, host: &str, qtype: u16) -> io::Result<Vec<u8>> {
-    let invalid = || io::Error::new(io::ErrorKind::InvalidInput, format!("invalid host name {host:?}"));
+    let invalid = || {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid host name {host:?}"),
+        )
+    };
     let name = host.strip_suffix('.').unwrap_or(host);
     if !name.is_ascii() || name.len() > 253 {
         return Err(invalid());
@@ -281,13 +293,19 @@ mod tests {
     fn upstreams_come_from_docker_or_resolv_conf() {
         let explicit = format!("{DOCKER}# ExtServers: [9.9.9.9 1.0.0.1]\n# Overrides: []\n");
         let quad9 = IpAddr::from([9, 9, 9, 9]);
-        assert_eq!(upstreams(&explicit), vec![quad9, IpAddr::from([1, 0, 0, 1])]);
+        assert_eq!(
+            upstreams(&explicit),
+            vec![quad9, IpAddr::from([1, 0, 0, 1])]
+        );
         let router = format!("{DOCKER}# ExtServers: [host(192.168.0.1) host(127.0.0.53)]\n");
         assert_eq!(upstreams(&router), vec![IpAddr::from([192, 168, 0, 1])]);
         let plain = "nameserver 9.9.9.9\nnameserver 127.0.0.53\nnameserver 2606:4700::1111\n";
         assert_eq!(
             upstreams(plain),
-            vec![IpAddr::from([9, 9, 9, 9]), "2606:4700::1111".parse().unwrap()]
+            vec![
+                IpAddr::from([9, 9, 9, 9]),
+                "2606:4700::1111".parse().unwrap()
+            ]
         );
         assert_eq!(upstreams("nameserver 127.0.0.53\n"), FALLBACK.to_vec());
         assert_eq!(upstreams(""), FALLBACK.to_vec());
@@ -306,7 +324,10 @@ mod tests {
         assert!(encode_query(1, "a..b", TYPE_A).is_err());
         assert!(encode_query(1, &format!("{}.com", "x".repeat(64)), TYPE_A).is_err());
         assert!(encode_query(1, "пример.рф", TYPE_A).is_err());
-        assert_eq!(encode_query(1, "a.b.", TYPE_A).unwrap(), encode_query(1, "a.b", TYPE_A).unwrap());
+        assert_eq!(
+            encode_query(1, "a.b.", TYPE_A).unwrap(),
+            encode_query(1, "a.b", TYPE_A).unwrap()
+        );
     }
 
     /// A reply to `query` with a CNAME and then `ips`, names compressed.
@@ -336,22 +357,44 @@ mod tests {
     #[test]
     fn parses_answers_and_rejects_strays() {
         let query = encode_query(0x1234, "panel.example.com", TYPE_A).unwrap();
-        let ips = [IpAddr::from([203, 0, 113, 7]), IpAddr::from([203, 0, 113, 8])];
+        let ips = [
+            IpAddr::from([203, 0, 113, 7]),
+            IpAddr::from([203, 0, 113, 8]),
+        ];
         let ok = reply(&query, [0x81, 0x80], &ips);
         assert_eq!(parse_answer(&ok, &query, TYPE_A).ok(), Some(ips.to_vec()));
 
         let mut other_id = ok.clone();
         other_id[1] ^= 1;
-        assert!(matches!(parse_answer(&other_id, &query, TYPE_A), Err(Answer::Mismatch)));
-        let other_name = reply(&encode_query(0x1234, "evil.example.com", TYPE_A).unwrap(), [0x81, 0x80], &ips);
-        assert!(matches!(parse_answer(&other_name, &query, TYPE_A), Err(Answer::Mismatch)));
+        assert!(matches!(
+            parse_answer(&other_id, &query, TYPE_A),
+            Err(Answer::Mismatch)
+        ));
+        let other_name = reply(
+            &encode_query(0x1234, "evil.example.com", TYPE_A).unwrap(),
+            [0x81, 0x80],
+            &ips,
+        );
+        assert!(matches!(
+            parse_answer(&other_name, &query, TYPE_A),
+            Err(Answer::Mismatch)
+        ));
         let truncated = reply(&query, [0x83, 0x80], &[]);
-        assert!(matches!(parse_answer(&truncated, &query, TYPE_A), Err(Answer::Truncated)));
+        assert!(matches!(
+            parse_answer(&truncated, &query, TYPE_A),
+            Err(Answer::Truncated)
+        ));
         let nxdomain = reply(&query, [0x81, 0x83], &[]);
         assert_eq!(parse_answer(&nxdomain, &query, TYPE_A).ok(), Some(vec![]));
         let servfail = reply(&query, [0x81, 0x82], &[]);
-        assert!(matches!(parse_answer(&servfail, &query, TYPE_A), Err(Answer::Bad(_))));
-        assert!(matches!(parse_answer(&ok[..ok.len() - 2], &query, TYPE_A), Err(Answer::Bad(_))));
+        assert!(matches!(
+            parse_answer(&servfail, &query, TYPE_A),
+            Err(Answer::Bad(_))
+        ));
+        assert!(matches!(
+            parse_answer(&ok[..ok.len() - 2], &query, TYPE_A),
+            Err(Answer::Bad(_))
+        ));
     }
 
     #[test]
@@ -367,17 +410,26 @@ mod tests {
             let mut stray = reply(&buf[..n], [0x81, 0x80], &[IpAddr::from([6, 6, 6, 6])]);
             stray[0] ^= 0xff;
             udp.send_to(&stray, peer).unwrap();
-            udp.send_to(&reply(&buf[..n], [0x83, 0x80], &[]), peer).unwrap();
+            udp.send_to(&reply(&buf[..n], [0x83, 0x80], &[]), peer)
+                .unwrap();
             let (mut conn, _) = tcp.accept().unwrap();
             let mut len = [0u8; 2];
             conn.read_exact(&mut len).unwrap();
             let mut query = vec![0u8; usize::from(u16::from_be_bytes(len))];
             conn.read_exact(&mut query).unwrap();
             let answer = reply(&query, [0x81, 0x80], &[ip]);
-            conn.write_all(&(answer.len() as u16).to_be_bytes()).unwrap();
+            conn.write_all(&(answer.len() as u16).to_be_bytes())
+                .unwrap();
             conn.write_all(&answer).unwrap();
         });
-        let ips = lookup(server, "panel.example.com", TYPE_A, None, Duration::from_secs(5)).unwrap();
+        let ips = lookup(
+            server,
+            "panel.example.com",
+            TYPE_A,
+            None,
+            Duration::from_secs(5),
+        )
+        .unwrap();
         assert_eq!(ips, vec![ip]);
         handle.join().unwrap();
     }
