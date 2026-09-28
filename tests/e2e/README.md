@@ -11,7 +11,7 @@ docker build -t mihomyak:local .
 
 | File | Role |
 |------|------|
-| `smoke.sh` | explicit proxy and TUN gateway against `mock_panel.py` on the host |
+| `smoke.sh` | image basics, explicit proxy and a DNS-leak refusal against `mock_panel.py` on the host |
 | `gateway.sh`, `gateway.compose.yml` | gateway stand: panels, two shadowsocks nodes, a target reachable only through them |
 | `gateway.toml` | the stand gateway's config (a fallback group) |
 | `mock_panel.py` | Remnawave-like panel: rules by User-Agent, device limit, stubs, Xray JSON, control endpoint |
