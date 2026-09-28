@@ -1,0 +1,81 @@
+name: Capture client requests
+
+# Lab: runs real clients against tests/capture/capture_server.py and keeps their
+# subscription requests as artifacts, the evidence for new emulations
+# (docs/dev/SUBSCRIPTIONS.md §7). Several versions and devices, so formulas are
+# derived from more than one sample. Nothing is published.
+
+on:
+  push:
+    branches: ["lab/**"]
+    paths: [".github/workflows/capture.yml", "tests/capture/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  happ-windows:
+    name: Happ Windows ${{ matrix.version }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {version: "4.3.0", arch: x64, runner: windows-latest}
+          - {version: "4.2.1", arch: x64, runner: windows-latest}
+          - {version: "4.4.8", arch: x64, runner: windows-latest}
+          - {version: "4.3.0", arch: arm64, runner: windows-11-arm}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: gh release download "${{ matrix.version }}" -R Happ-proxy/happ-desktop -p "setup-Happ.${{ matrix.arch }}.exe"
+      - name: Capture
+        shell: pwsh
+        run: |
+          $server = Start-Process python -ArgumentList "tests/capture/capture_server.py --host 127.0.0.1 --port 18080 --out captures" -PassThru -RedirectStandardOutput server.log
+          Start-Sleep 2
+          ./tests/capture/windows.ps1 -Installer "setup-Happ.${{ matrix.arch }}.exe" -Link "happ://add/http://127.0.0.1:18080/sub/capture-windows" -Out captures
+          Stop-Process $server -Force
+          Get-Content server.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: happ-windows-${{ matrix.version }}-${{ matrix.arch }}
+          path: captures
+
+  happ-android:
+    name: Happ Android ${{ matrix.version }} (API ${{ matrix.api }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {version: "4.6.0", api: 34}
+          - {version: "4.6.0", api: 33}
+          - {version: "4.4.1", api: 34}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: gh release download "${{ matrix.version }}" -R Happ-proxy/happ-android -p Happ.apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - run: python3 tests/capture/capture_server.py --port 18080 --out captures > server.log 2>&1 &
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: APK=Happ.apk LINK='happ://add/http://10.0.2.2:18080/sub/capture-android' OUT=captures ./tests/capture/android.sh
+      - if: always()
+        run: cat server.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: happ-android-${{ matrix.version }}-api${{ matrix.api }}
+          path: captures
