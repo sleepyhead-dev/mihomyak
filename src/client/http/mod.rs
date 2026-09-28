@@ -14,6 +14,7 @@
 //! decoded body are bounded, and the whole exchange has a wall-clock deadline so a
 //! server trickling one byte per `io_timeout` cannot hold the supervisor forever.
 
+mod dns;
 mod response;
 mod url;
 
@@ -138,9 +139,16 @@ impl Client {
     }
 
     fn dial(&self, host: &str, port: u16, deadline: Instant) -> Result<TcpStream> {
-        let addrs = (host, port)
-            .to_socket_addrs()
-            .with_context(|| format!("resolve {host}"))?;
+        let addrs: Vec<SocketAddr> = match self.mark {
+            // The kill switch keeps DNS in: ask past it (dns.rs).
+            Some(mark) if dns::needs_marked_lookup(host) => {
+                dns::resolve(host, port, mark, deadline)?
+            }
+            _ => (host, port)
+                .to_socket_addrs()
+                .with_context(|| format!("resolve {host}"))?
+                .collect(),
+        };
         let mut last_err = None;
         for addr in addrs {
             let timeout = self.connect_timeout.min(remaining(deadline)?);
@@ -202,32 +210,32 @@ impl Client {
     }
 }
 
-/// `TcpStream::connect_timeout` with `SO_MARK` set before the SYN leaves: std
-/// cannot configure a socket before connecting, so this is done with libc.
-fn connect_marked(addr: &SocketAddr, timeout: Duration, mark: u32) -> io::Result<TcpStream> {
+fn check(ret: libc::c_int) -> io::Result<libc::c_int> {
+    if ret < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(ret)
+    }
+}
+
+/// A new socket of `kind` (`SOCK_STREAM`, `SOCK_DGRAM`) for `addr`'s family with
+/// `SO_MARK` set, so the gateway kill switch lets its packets out.
+fn marked_socket(
+    addr: &SocketAddr,
+    kind: libc::c_int,
+    mark: u32,
+) -> io::Result<std::os::fd::OwnedFd> {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
-    fn check(ret: libc::c_int) -> io::Result<libc::c_int> {
-        if ret < 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(ret)
-        }
-    }
-    // SAFETY: plain socket syscalls on a descriptor owned by `fd`; the sockaddr
-    // structs are fully initialised (zeroed, then every relevant field set) and
-    // passed with their exact sizes.
+    let family = if addr.is_ipv4() {
+        libc::AF_INET
+    } else {
+        libc::AF_INET6
+    };
+    // SAFETY: plain socket syscalls; the descriptor is owned by `fd` at once and
+    // the mark is passed with its exact size.
     unsafe {
-        let family = if addr.is_ipv4() {
-            libc::AF_INET
-        } else {
-            libc::AF_INET6
-        };
-        let raw = check(libc::socket(
-            family,
-            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
-            0,
-        ))?;
+        let raw = check(libc::socket(family, kind | libc::SOCK_CLOEXEC, 0))?;
         let fd = OwnedFd::from_raw_fd(raw);
         let set_mark = libc::setsockopt(
             fd.as_raw_fd(),
@@ -244,6 +252,20 @@ fn connect_marked(addr: &SocketAddr, timeout: Duration, mark: u32) -> io::Result
             }
             crate::debug!("cannot set the kill-switch mark ({err}); connecting without it");
         }
+        Ok(fd)
+    }
+}
+
+/// `TcpStream::connect_timeout` with `SO_MARK` set before the SYN leaves: std
+/// cannot configure a socket before connecting, so this is done with libc.
+fn connect_marked(addr: &SocketAddr, timeout: Duration, mark: u32) -> io::Result<TcpStream> {
+    use std::os::fd::AsRawFd;
+
+    let fd = marked_socket(addr, libc::SOCK_STREAM | libc::SOCK_NONBLOCK, mark)?;
+    // SAFETY: plain socket syscalls on a descriptor owned by `fd`; the sockaddr
+    // structs are fully initialised (zeroed, then every relevant field set) and
+    // passed with their exact sizes.
+    unsafe {
         let mut storage: libc::sockaddr_storage = std::mem::zeroed();
         let len = match addr {
             SocketAddr::V4(a) => {

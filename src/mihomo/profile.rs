@@ -852,8 +852,14 @@ fn apply_gateway(map: &mut Mapping, config: &Config, params: &Params<'_>) {
     }
     set(dns, "enable", true);
     set(dns, "listen", "127.0.0.1:1053");
-    if !dns.contains_key("enhanced-mode") {
-        set(dns, "enhanced-mode", "fake-ip");
+    // Always fake-ip, whatever the provider chose: the rules then see names, not
+    // addresses, so each name is resolved where it goes (the exit server, or
+    // `direct-nameserver` for direct rules). With `redir-host` the apps' names
+    // are resolved up front by the provider's (often foreign) nameserver, and
+    // domains that answer only Russian resolvers (gosuslugi.ru) fail. The panel
+    // cannot see this; `[mihomo] dns` in the config file still overrides it.
+    set(dns, "enhanced-mode", "fake-ip");
+    if !dns.contains_key("fake-ip-range") {
         set(dns, "fake-ip-range", "198.18.0.1/16");
     }
     // Panel hosts must resolve to real addresses. How depends on the filter mode:
@@ -1087,6 +1093,12 @@ rules:
             Some("1.1.1.1"),
             "provider DNS kept"
         );
+        assert_eq!(
+            v["dns"]["enhanced-mode"].as_str(),
+            Some("fake-ip"),
+            "the provider's redir-host is replaced"
+        );
+        assert_eq!(v["dns"]["fake-ip-range"].as_str(), Some("198.18.0.1/16"));
 
         let v = built(
             &parsed("proxies: [{name: a, type: ss, server: h, port: 1080}]"),
@@ -1094,6 +1106,15 @@ rules:
         );
         assert_eq!(v["dns"]["enhanced-mode"].as_str(), Some("fake-ip"));
         assert_eq!(v["dns"]["enable"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn gateway_dns_mode_can_be_overridden_by_the_user() {
+        let mut config: Config =
+            toml::from_str("[mihomo]\ndns = { enhanced-mode = \"redir-host\" }").unwrap();
+        config.gateway.enable = true;
+        let v = built(&parsed(REMNAWAVE), &config);
+        assert_eq!(v["dns"]["enhanced-mode"].as_str(), Some("redir-host"));
     }
 
     #[test]

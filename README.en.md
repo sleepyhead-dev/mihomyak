@@ -130,8 +130,9 @@ sudo systemctl enable --now mihomyak
 
 `mihomyak --help` shows all commands by group; `mihomyak <command> --help` gives
 details. The installer sets up the `mihomyak` command on the host; without it, in
-Docker: `docker exec mihomyak mihomyak <command>`. Two more commands exist only on the
-host: `mihomyak logs` and `mihomyak upgrade` (update the image).
+Docker: `docker exec mihomyak mihomyak <command>`. Three more commands exist only on the
+host: `mihomyak logs`, `mihomyak restart` (restart the gateway together with the
+containers in its network) and `mihomyak upgrade` (update the image).
 
 | Command | What it does |
 |---------|------------|

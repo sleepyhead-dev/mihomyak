@@ -4,6 +4,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
 
 ## [Unreleased]
 
+### Changed
+- **The gateway always uses fake-ip DNS**, also when the provider's profile sets
+  `redir-host`. With `redir-host` the provider's (often foreign) nameserver
+  resolved every app lookup up front, and domains that answer only Russian
+  resolvers (gosuslugi.ru) failed. `[mihomo] dns = { enhanced-mode = … }` still
+  overrides it.
+- **The kill switch no longer lets DNS out.** While mihomo is down the apps'
+  lookups are rejected instead of going to an outside server in the clear;
+  mihomyak finds the panel with its own marked DNS queries to the `dns:`
+  servers (names without a dot, like compose services, still go to Docker).
+- The host command installed by `install.sh` has `mihomyak restart`: through
+  compose, so the containers in the gateway's network follow it
+  (`docker restart mihomyak` leaves them without network).
+
 ### Fixed
 - `status`, `fetch` and the supervisor log no longer print the subscription
   token when the panel echoes the link back (`profile-web-page-url`,

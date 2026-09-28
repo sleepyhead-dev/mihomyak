@@ -127,8 +127,9 @@ sudo systemctl enable --now mihomyak
 
 `mihomyak --help` показывает все команды по группам, `mihomyak <команда> --help` —
 подробности. Команду `mihomyak` на хосте ставит установщик; без неё в Docker —
-`docker exec mihomyak mihomyak <команда>`. Ещё две команды есть только на хосте:
-`mihomyak logs` и `mihomyak upgrade` (обновить образ).
+`docker exec mihomyak mihomyak <команда>`. Ещё три команды есть только на хосте:
+`mihomyak logs`, `mihomyak restart` (перезапустить шлюз вместе с контейнерами в его сети)
+и `mihomyak upgrade` (обновить образ).
 
 | Команда | Что делает |
 |---------|------------|

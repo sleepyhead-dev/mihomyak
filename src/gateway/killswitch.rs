@@ -6,13 +6,14 @@
 //! out only what cannot leak:
 //!
 //! * traffic into the TUN device and over loopback;
-//! * mihomo's own connections (`routing-mark`) and mihomyak's (`SO_MARK`), so
-//!   proxies and the subscription panel stay reachable;
+//! * mihomo's own connections (`routing-mark`) and mihomyak's (`SO_MARK`, its
+//!   DNS lookups included), so proxies and the subscription panel stay reachable;
 //! * replies to incoming connections (published ports keep working);
-//! * DNS (port 53): Docker's resolver and the panel lookup need it;
 //! * private, link-local and unique-local destinations (containers, LAN).
 //!
-//! Everything else is rejected. The chain is installed atomically with
+//! Everything else is rejected, DNS included: while mihomo is down the apps'
+//! names are not resolved at all rather than in the clear by an outside server
+//! (a DNS server in the LAN is still reachable, as any private address is). The chain is installed atomically with
 //! `iptables-restore`, which also covers nftables-backed `iptables` (the Docker
 //! image ships `iptables-nft`). It stays while mihomyak runs and is removed on a
 //! clean shutdown; after a crash it remains in place, which is the point.
@@ -70,7 +71,7 @@ pub fn enable() -> Result<KillSwitch> {
         }
     }
     crate::info!(
-        "kill switch on: only {TUN_DEVICE}, mihomo, DNS, replies and private networks may leave this host/container"
+        "kill switch on: only {TUN_DEVICE}, mihomo, replies and private networks may leave this host/container"
     );
     Ok(KillSwitch { families })
 }
@@ -96,8 +97,6 @@ fn ruleset(family: Family, add_jump: bool) -> String {
     rule(format!("-o {TUN_DEVICE}"));
     rule(format!("-m mark --mark {MARK:#x}"));
     rule("-m conntrack --ctdir REPLY".into());
-    rule("-p udp --dport 53".into());
-    rule("-p tcp --dport 53".into());
     let lan = match family {
         Family::V4 => LAN_V4,
         Family::V6 => LAN_V6,
@@ -179,6 +178,7 @@ mod tests {
         assert!(v4.contains("-A MIHOMYAK -m mark --mark 0x6d796b -j RETURN\n"));
         assert!(v4.contains("-A MIHOMYAK -d 172.16.0.0/12 -j RETURN\n"));
         assert!(!v4.contains("fc00::/7"));
+        assert!(!v4.contains("--dport"), "no DNS or other port exceptions");
         // The reject comes last, the jump is added once, the commit closes it.
         let reject = v4.find("-A MIHOMYAK -j REJECT").unwrap();
         assert!(v4.rfind("-j RETURN").unwrap() < reject);
