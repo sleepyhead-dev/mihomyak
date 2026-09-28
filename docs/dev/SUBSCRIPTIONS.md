@@ -425,8 +425,8 @@ Accept-Language: en-US,*
 | `X-Device-Locale` / `Accept-Language` | `EN` / `en-US,*` для культуры en-US | регион в Windows есть всегда |
 | `Accept-Encoding` | `gzip, deflate` (в Windows-сборке нет brotli и zstd) | все захваты |
 
-Маркер дня (`5`/`6`) во всех захватах `6` (28-е число по Москве); что он зависит от
-дня так же, как в Linux-сборке, — вывод, не проверено захватом в нечётный день.
+Маркер дня (`5`/`6`) тот же, что в Linux-сборке: захват 28-го числа по Москве даёт `6`, захват
+с часами раннера, переведёнными на 29-е, — `2609151455503` (проверено для Windows и Android).
 
 mihomyak (`platform = "windows"`, только `client = "happ"`) выводит из machine-id
 `MachineGuid` (UUID v4 в нижнем регистре) и имя компьютера `DESKTOP-XXXXXXX`;
