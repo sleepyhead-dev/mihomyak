@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use clap::builder::styling::{AnsiColor, Effects, Style, Styles};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
-use crate::client::emulation::ClientKind;
+use crate::client::emulation::{ClientKind, Platform};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -77,13 +77,16 @@ pub enum Command {
             Prints the exact request headers, the panel's response headers, provider \
             info, the detected format and proxies, and a verdict (usable, stub, \
             refused). Nothing is written.",
-        after_help = "Examples:\n  mihomyak fetch\n  mihomyak fetch --client koala\n  \
+        after_help = "Examples:\n  mihomyak fetch\n  mihomyak fetch --client happ --platform windows\n  \
             mihomyak fetch --user-agent 'clash-verge/v2.4.0' --body"
     )]
     Fetch {
         /// Impersonate another client for this request.
         #[arg(long, value_name = "CLIENT", value_parser = parse_client)]
         client: Option<ClientKind>,
+        /// Impersonate the client on another platform (linux, windows, android).
+        #[arg(long, value_name = "OS", value_parser = parse_platform)]
+        platform: Option<Platform>,
         /// Override the User-Agent for this request.
         #[arg(long, value_name = "UA")]
         user_agent: Option<String>,
@@ -96,6 +99,9 @@ pub enum Command {
         /// Show what another client would send.
         #[arg(long, value_name = "CLIENT", value_parser = parse_client)]
         client: Option<ClientKind>,
+        /// Show what the client would send on another platform.
+        #[arg(long, value_name = "OS", value_parser = parse_platform)]
+        platform: Option<Platform>,
     },
     /// Traffic, expiry, next update, mihomo state and chosen proxies.
     Status,
@@ -258,6 +264,10 @@ pub enum CoreCommand {
     },
     /// Print the version of the configured mihomo binary.
     Version,
+}
+
+fn parse_platform(s: &str) -> Result<Platform, String> {
+    s.parse().map_err(|e: anyhow::Error| e.to_string())
 }
 
 fn parse_client(s: &str) -> Result<ClientKind, String> {

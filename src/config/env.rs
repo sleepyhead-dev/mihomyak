@@ -22,6 +22,9 @@ impl Config {
         if let Some(v) = env("MIHOMYAK_SUB_URL") {
             sub.url = Some(v);
         }
+        if let Some(v) = env("MIHOMYAK_PLATFORM") {
+            sub.platform = v.parse()?;
+        }
         if let Some(v) = env("MIHOMYAK_CLIENT") {
             sub.client = v.parse()?;
         }

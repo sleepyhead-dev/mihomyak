@@ -152,8 +152,9 @@ pub(super) fn check(config: Config) -> Result<ExitCode> {
     let updater = Updater::new(config)?;
     let cfg = &updater.config;
     println!(
-        "client:       {} ({})",
+        "client:       {} on {} ({})",
         updater.emulation.kind,
+        updater.emulation.platform,
         updater.emulation.user_agent()
     );
     println!("subscription: {}", subscription::redact(&updater.url()?));
@@ -235,7 +236,7 @@ pub(super) fn identity(config: Config) -> Result<ExitCode> {
     let updater = Updater::new(config)?;
     let e = &updater.emulation;
     let d = e.device_headers();
-    println!("client:        {}", e.kind);
+    println!("client:        {} on {}", e.kind, e.platform);
     println!("user-agent:    {}", e.user_agent());
     println!("hwid:          {}", d.hwid);
     println!("device os:     {}", d.os);

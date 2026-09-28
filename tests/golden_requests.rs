@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
 
-use mihomyak::client::emulation::{ClientKind, Emulation};
+use mihomyak::client::emulation::{ClientKind, Emulation, Platform};
 use mihomyak::client::http::{Client, Url};
 use mihomyak::client::identity::{Identity, OsRelease};
 use mihomyak::config::Config;
@@ -103,6 +103,72 @@ fn happ_request_is_byte_exact() {
     assert_eq!(
         sent, expected,
         "request differs from the captured Happ request"
+    );
+}
+
+/// Happ on another platform with the device facts of the capture (runner hostname,
+/// its real MachineGuid / ANDROID_ID and model), so the bytes must match exactly.
+fn happ_on(
+    platform: Platform,
+    hwid: &str,
+    hostname: Option<&str>,
+    model: Option<&str>,
+) -> Emulation {
+    let mut config = Config::default();
+    config.subscription.client = ClientKind::Happ;
+    config.subscription.platform = platform;
+    config.device.hwid = Some(hwid.into());
+    config.device.hostname = hostname.map(Into::into);
+    config.device.model = model.map(Into::into);
+    let identity = Identity {
+        machine_id: "0d0af05ee8fd4dc29275718f2ce4dff1".into(),
+        os: OsRelease::from_raw(UBUNTU_OS_RELEASE),
+        kernel_release: "6.8.0-45-generic".into(),
+        hostname: "ignored-on-windows".into(),
+        locale: "en".into(),
+    };
+    Emulation::new(&config, identity).unwrap()
+}
+
+#[test]
+fn happ_windows_request_is_byte_exact() {
+    let emulation = happ_on(
+        Platform::Windows,
+        "a3ee4d8e-7e6c-4c32-9490-f157ef0ceea8",
+        Some("runnervm99s1a"),
+        None,
+    );
+    let (sent, port) = capture(&emulation, OK);
+    // Captured on an even Moscow date: adapt the daily marker to this run.
+    let marker = mihomyak::client::emulation::happ_day_marker(mihomyak::util::now_unix());
+    let expected = include_str!("fixtures/requests/happ-4.3.0-windows-x64.http")
+        .replace("{PORT}", &port.to_string())
+        .replace("2609151455603", &format!("2609151455{marker}03"));
+    assert_eq!(
+        sent, expected,
+        "differs from the captured Happ for Windows request"
+    );
+}
+
+#[test]
+fn happ_android_request_is_byte_exact() {
+    let emulation = happ_on(
+        Platform::Android,
+        "3693bef137bbd47f",
+        None,
+        Some("sdk_gphone64_x86_64"),
+    );
+    let (sent, port) = capture(&emulation, OK);
+    let marker = mihomyak::client::emulation::happ_day_marker(mihomyak::util::now_unix());
+    let expected = include_str!("fixtures/requests/happ-4.6.0-android.http")
+        .replace("{PORT}", &port.to_string())
+        .replace(
+            "17903218884031681667",
+            &format!("17903218884031681{marker}67"),
+        );
+    assert_eq!(
+        sent, expected,
+        "differs from the captured Happ for Android request"
     );
 }
 

@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use crate::client::emulation::ClientKind;
+use crate::client::emulation::{ClientKind, Platform};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -41,6 +41,9 @@ pub struct Subscription {
     pub url: Option<String>,
     /// Which real client to impersonate.
     pub client: ClientKind,
+    /// The operating system the client runs on: `linux`, or `windows`/`android`
+    /// (for `happ`; captured from the real apps).
+    pub platform: Platform,
     /// Overrides the emulated app version (e.g. `0.4.3`) without a rebuild.
     pub app_version: Option<String>,
     /// Overrides Happ's build id (`Happ/<ver>/Linux/<build>…`).
@@ -60,6 +63,7 @@ impl Default for Subscription {
         Self {
             url: None,
             client: ClientKind::FlClashX,
+            platform: Platform::Linux,
             app_version: None,
             app_build: None,
             core_version: None,
@@ -264,6 +268,10 @@ pub struct Device {
     /// Hostname reported by Happ (`X-Device-Model: <hostname>_<arch>`).
     /// Default: the kernel hostname (in Docker set `hostname:` in compose).
     pub hostname: Option<String>,
+    /// Windows/Android: the OS version sent (`X-Ver-Os`), e.g. `11_10.0.22631` or `15`.
+    pub os_version: Option<String>,
+    /// Android: the phone model sent (`X-Device-model`, like `Build.MODEL`).
+    pub model: Option<String>,
     /// UI locale reported by Happ: `en` (default) or e.g. `ru_RU`.
     pub locale: String,
 }
@@ -276,6 +284,8 @@ impl Default for Device {
             hwid: None,
             os_release: PathBuf::from("/etc/os-release"),
             hostname: None,
+            os_version: None,
+            model: None,
             locale: "en".into(),
         }
     }
