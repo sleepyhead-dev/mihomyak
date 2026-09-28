@@ -4,6 +4,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-28
+
+### Added
+- One-command installer: `curl -fsSL …/releases/latest/download/install.sh | sh`.
+  It asks for the link, the mode (Docker gateway, Docker proxy or a systemd
+  service) and a device seed (any word, or a random one), installs into
+  `/opt/mihomyak`, waits until mihomyak is healthy, enables autostart and adds a
+  `mihomyak` command on the host (`status`, `tui`, `logs`, `upgrade`,
+  `uninstall`). `--yes` with flags installs without questions; `update` and
+  `uninstall` use the same script. Messages follow the system language (Russian
+  or English). Tested in CI on amd64 and arm64 for all three modes; releases
+  also run the published one-liner.
+- The compose files take the image from `MIHOMYAK_IMAGE` (to pin a version).
+
 ### Changed
 - The `ru-direct` preset is off by default again: all traffic goes through the
   VPN unless `MIHOMYAK_RULES_PRESETS=ru-direct` is set.

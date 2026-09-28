@@ -13,7 +13,7 @@ name: mihomyak
 
 services:
   mihomyak:
-    image: ghcr.io/sleepyhead-dev/mihomyak:latest
+    image: ${MIHOMYAK_IMAGE:-ghcr.io/sleepyhead-dev/mihomyak:latest}
     container_name: mihomyak
     hostname: ${MIHOMYAK_HOSTNAME:-home-server}
     restart: unless-stopped

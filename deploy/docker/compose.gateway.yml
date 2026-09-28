@@ -13,7 +13,7 @@ name: mihomyak
 
 services:
   mihomyak:
-    image: ghcr.io/sleepyhead-dev/mihomyak:latest
+    image: ${MIHOMYAK_IMAGE:-ghcr.io/sleepyhead-dev/mihomyak:latest}
     container_name: mihomyak
     # Reported to the provider by the Happ emulation (X-Device-Model: <hostname>_<arch>).
     hostname: ${MIHOMYAK_HOSTNAME:-home-server}

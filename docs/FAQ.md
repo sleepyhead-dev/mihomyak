@@ -75,12 +75,14 @@ docker exec my-app nslookup example.com            # адрес 198.18.x.x — D
 
 ### Как обновить mihomyak?
 
+`mihomyak upgrade` (то же самое: `docker compose pull && docker compose up -d` в
+`/opt/mihomyak`). Для установки без Docker — повторный запуск установщика с `update`:
+
 ```sh
-docker compose pull && docker compose up -d
+curl -fsSL https://github.com/sleepyhead-dev/mihomyak/releases/latest/download/install.sh | sh -s -- update
 ```
 
-Без Docker — скачайте новый архив из релизов, замените бинарник и выполните
-`systemctl restart mihomyak`. Кэш подписки и устройство сохраняются.
+Кэш подписки, настройки и устройство сохраняются.
 
 ### Как перенести VPN на другой сервер и не занять новое устройство?
 
