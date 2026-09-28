@@ -46,7 +46,7 @@ pub fn spawn_server_capturing_head(response: Vec<u8>) -> (u16, JoinHandle<String
     (port, handle)
 }
 
-/// Reads and discards a request head byte by byte until the terminating CRLFCRLF.
+/// Reads a request head byte by byte up to the terminating CRLFCRLF.
 fn read_request_head(sock: &mut impl Read) -> Vec<u8> {
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
