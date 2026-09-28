@@ -28,6 +28,14 @@ tap() {
   return 1
 }
 
+# DATE=MMDDhhmmCCYY.ss sets the emulator clock (e.g. to check day-dependent values).
+if [ -n "${DATE:-}" ]; then
+  adb root >/dev/null && adb wait-for-device
+  adb shell settings put global auto_time 0
+  adb shell date "$DATE"
+  adb shell date | tee "$out/clock.txt"
+fi
+
 aapt=$(ls "$ANDROID_HOME"/build-tools/*/aapt 2>/dev/null | tail -1)
 [ -n "$aapt" ] && "$aapt" dump badging "$APK" | grep -E "^package:|native-code|sdkVersion" | tee "$out/apk-info.txt"
 pkg=$(grep -o "package: name='[^']*'" "$out/apk-info.txt" 2>/dev/null | cut -d"'" -f2)
