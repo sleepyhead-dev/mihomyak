@@ -4,6 +4,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versions follow SemVer.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-28
+
 ### Added
 - One-command installer: `curl -fsSL …/releases/latest/download/install.sh | sh`.
   It asks for the link, the mode (Docker gateway, Docker proxy or a systemd

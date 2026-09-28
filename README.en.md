@@ -48,27 +48,42 @@ provider panel ──subscription──▶ mihomyak ──verified config──�
 ## Installation
 
 You need Linux and a subscription — a link like `https://…/sub/…` from a bot or the
-provider's personal dashboard. Prebuilt images and binaries are available for `amd64`,
-`arm64` (Raspberry Pi 3/4/5 with a 64-bit OS), and `armv7`.
-
-### Option 1. Docker gateway (recommended)
-
-Containers connected to the gateway reach the internet only through the VPN.
+provider's personal dashboard. Supported: `amd64`, `arm64` (Raspberry Pi 3/4/5 with a
+64-bit OS), and `armv7`. Docker modes need
+[Docker](https://docs.docker.com/engine/install/) installed.
 
 ```sh
-mkdir -p ~/mihomyak && cd ~/mihomyak
-curl -fsSLO https://raw.githubusercontent.com/sleepyhead-dev/mihomyak/main/deploy/docker/compose.gateway.yml
-curl -fsSL -o .env https://raw.githubusercontent.com/sleepyhead-dev/mihomyak/main/deploy/docker/.env.example
-chmod 600 .env
-nano .env                                   # paste your link into MIHOMYAK_SUB_URL
-docker compose -f compose.gateway.yml up -d
-docker compose -f compose.gateway.yml exec mihomyak mihomyak status
+curl -fsSL https://github.com/sleepyhead-dev/mihomyak/releases/latest/download/install.sh | sh
 ```
 
-The gateway starts itself after a reboot (`restart: unless-stopped`), provided Docker's
-autostart is enabled (`sudo systemctl enable docker`, usually already the case).
+The installer asks for the link, the mode, and a device seed, and takes care of the rest:
 
-Your own container connects with a single line in the same `compose.gateway.yml`:
+- **gateway** (default): containers connected to it reach the internet only through the
+  VPN, including DNS;
+- **proxy**: HTTP and SOCKS5 on `mihomyak:7890` for containers of any compose project;
+- **without Docker**: a systemd service with a proxy on `127.0.0.1:7890`.
+
+It creates `/opt/mihomyak` with the settings (`.env`, mode `600`), starts mihomyak, waits
+for it to come up, enables autostart after a reboot, and installs the `mihomyak` command
+(`mihomyak status`, `mihomyak tui`, `mihomyak logs`, `mihomyak upgrade`). At the end it
+shows how to connect your own container.
+
+The seed is any word or phrase (e.g. `apple`) the device is derived from: the same seed
+gives the same device at the provider on any server. Press Enter for a random seed.
+
+Without prompts, e.g. for scripts:
+
+```sh
+curl -fsSL https://github.com/sleepyhead-dev/mihomyak/releases/latest/download/install.sh \
+  | sh -s -- --yes --url 'https://…/sub/…' --mode gateway --seed apple
+```
+
+Update: `mihomyak upgrade`. Remove: `mihomyak uninstall`.
+
+### Connect your container to the gateway
+
+Add a service to `/opt/mihomyak/compose.yml` and run `docker compose up -d` in that
+folder:
 
 ```yaml
   my-app:
@@ -76,40 +91,47 @@ Your own container connects with a single line in the same `compose.gateway.yml`
     network_mode: service:mihomyak        # the whole app's networking goes through the VPN
     depends_on:
       mihomyak: {condition: service_healthy, restart: true}
+    restart: unless-stopped
 ```
 
-The app's ports are published on the `mihomyak` service. How to connect several
-projects, update the gateway, and what to do about DNS — see
+The app's ports are published on the `mihomyak` service. How to connect projects from
+other folders, and what to pick for several projects — see
 [docs/DOCKER.md](docs/DOCKER.md).
 
-### Option 2. Proxy for containers and apps
+<details>
+<summary>Manual installation</summary>
 
-If your app is fine with just `HTTP_PROXY`, use
-[`compose.proxy.yml`](deploy/docker/compose.proxy.yml): mihomyak listens on
-`http://mihomyak:7890` (HTTP and SOCKS5) on a shared Docker network, and apps point to it
-via `HTTP_PROXY`/`ALL_PROXY`. Restarting the proxy doesn't break the app.
-
-### Option 3. Without Docker (systemd)
+Docker gateway (for the proxy, use `compose.proxy.yml`):
 
 ```sh
-# binary for your architecture: x86_64, aarch64, or armv7
+sudo mkdir -p /opt/mihomyak && sudo chown "$USER" /opt/mihomyak && cd /opt/mihomyak
+curl -fsSL -o compose.yml https://github.com/sleepyhead-dev/mihomyak/releases/latest/download/compose.gateway.yml
+curl -fsSL -o .env https://github.com/sleepyhead-dev/mihomyak/releases/latest/download/env.example
+chmod 600 .env && nano .env                 # paste your link into MIHOMYAK_SUB_URL, and a seed
+docker compose up -d
+docker compose exec mihomyak mihomyak status
+```
+
+Without Docker (binary for your architecture: `x86_64`, `aarch64`, `armv7`):
+
+```sh
 curl -fsSL https://github.com/sleepyhead-dev/mihomyak/releases/latest/download/mihomyak-aarch64-unknown-linux-musl.tar.gz | tar xz
 sudo install -m 755 mihomyak-*/mihomyak /usr/local/bin/
 sudo mihomyak core install --dest /usr/local/bin/mihomo
 sudo install -D -m 600 mihomyak-*/deploy/config.example.toml /etc/mihomyak/config.toml
 sudoedit /etc/mihomyak/config.toml          # paste your link into [subscription] url
 sudo cp mihomyak-*/deploy/systemd/mihomyak.service /etc/systemd/system/
-sudo systemctl enable --now mihomyak        # start now and on every reboot
-mihomyak status
+sudo systemctl enable --now mihomyak
 ```
 
-The proxy will be on `127.0.0.1:7890`. To proxy the whole host, enable
-`[gateway] enable = true` ([docs/CONFIG.md](docs/CONFIG.md#gateway--прозрачный-шлюз-tun)).
+</details>
 
 ## Commands
 
 `mihomyak --help` shows all commands by group; `mihomyak <command> --help` gives
-details. In Docker: `docker exec mihomyak mihomyak <command>`.
+details. The installer sets up the `mihomyak` command on the host; without it, in
+Docker: `docker exec mihomyak mihomyak <command>`. Two more commands exist only on the
+host: `mihomyak logs` and `mihomyak upgrade` (update the image).
 
 | Command | What it does |
 |---------|------------|
@@ -127,7 +149,8 @@ details. In Docker: `docker exec mihomyak mihomyak <command>`.
 
 ## Configuration
 
-For Docker, a `.env` next to the compose file is enough. Main variables:
+Settings for a Docker install live in `/opt/mihomyak/.env`; after editing, run
+`docker compose up -d` in that folder. Main variables:
 
 | Variable | What it sets |
 |------------|------------|
@@ -177,5 +200,3 @@ The detailed docs above are in Russian.
 
 [MIT](LICENSE). The project grew out of a fork of
 [mihoro](https://github.com/spencerwooo/mihoro) and was completely rewritten.
-</content>
-</invoke>
