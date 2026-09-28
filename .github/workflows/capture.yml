@@ -1,0 +1,72 @@
+name: Capture client requests
+
+# Manual lab: runs real clients against tests/capture/capture_server.py and keeps
+# their subscription requests as artifacts, the evidence for new emulations
+# (docs/dev/SUBSCRIPTIONS.md §7). Nothing is published.
+
+on:
+  push:
+    branches: ["lab/**"]
+    paths: [".github/workflows/capture.yml", "tests/capture/**"]
+  workflow_dispatch:
+    inputs:
+      happ_desktop:
+        description: Happ Desktop release tag (Happ-proxy/happ-desktop)
+        default: "4.3.0"
+      happ_android:
+        description: Happ Android release tag (Happ-proxy/happ-android)
+        default: "4.6.0"
+
+permissions:
+  contents: read
+
+jobs:
+  happ-windows:
+    name: Happ Windows ${{ inputs.happ_desktop || '4.3.0' }}
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: gh release download "${{ inputs.happ_desktop || '4.3.0' }}" -R Happ-proxy/happ-desktop -p setup-Happ.x64.exe
+      - name: Capture
+        shell: pwsh
+        run: |
+          $server = Start-Process python -ArgumentList "tests/capture/capture_server.py --host 127.0.0.1 --port 18080 --out captures" -PassThru -RedirectStandardOutput server.log
+          Start-Sleep 2
+          ./tests/capture/windows.ps1 -Installer setup-Happ.x64.exe -Link "happ://add/http://127.0.0.1:18080/sub/capture-windows" -Out captures
+          Stop-Process $server -Force
+          Get-Content server.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: happ-windows-${{ inputs.happ_desktop || '4.3.0' }}
+          path: captures
+
+  happ-android:
+    name: Happ Android ${{ inputs.happ_android || '4.6.0' }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: gh release download "${{ inputs.happ_android || '4.6.0' }}" -R Happ-proxy/happ-android -p Happ.apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - run: python3 tests/capture/capture_server.py --port 18080 --out captures > server.log 2>&1 &
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: APK=Happ.apk LINK='happ://add/http://10.0.2.2:18080/sub/capture-android' OUT=captures ./tests/capture/android.sh
+      - if: always()
+        run: cat server.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: happ-android-${{ inputs.happ_android || '4.6.0' }}
+          path: captures
