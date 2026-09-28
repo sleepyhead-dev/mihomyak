@@ -3,9 +3,10 @@
 #
 #   docker build -t mihomyak:local . && ./tests/e2e/smoke.sh mihomyak:local
 #
-# Runs hardened containers (explicit proxy; TUN gateway with kill switch;
-# gateways on a user-defined network with and without --dns),
-# waits until mihomo is healthy and checks that the subscription was applied.
+# Checks --version/--help, the image's declared volumes, a hardened explicit-proxy
+# container becoming healthy with nodes and seeded geodata, and that a gateway on
+# a user-defined network without --dns refuses to start rather than leak (the TUN
+# gateway, kill switch and app DNS are covered more thoroughly by gateway.sh).
 # Needs docker, python3 and /dev/net/tun. Used by CI.
 set -eu
 
@@ -22,7 +23,7 @@ python3 tests/e2e/mock_panel.py --host 0.0.0.0 --port "$port" --device-limit 4\
   --proxy "$ss_link#NL-1" --proxy "$ss_link#DE-1" >"$log_dir/panel.log" 2>&1 &
 panel_pid=$!
 
-containers="mihomyak-e2e-proxy mihomyak-e2e-gateway mihomyak-e2e-dns mihomyak-e2e-nodns"
+containers="mihomyak-e2e-proxy mihomyak-e2e-nodns"
 
 cleanup() {
   kill "$panel_pid" 2>/dev/null || true
@@ -69,29 +70,12 @@ echo "== explicit proxy"
 start mihomyak-e2e-proxy
 docker exec mihomyak-e2e-proxy test -s /data/mihomo/geoip.metadb || fail "geodata not seeded"
 
-echo "== TUN gateway with kill switch"
-start mihomyak-e2e-gateway --device /dev/net/tun --cap-add NET_ADMIN \
-  -e MIHOMYAK_GATEWAY=1 -e MIHOMYAK_KILL_SWITCH=1
-docker exec mihomyak-e2e-gateway iptables -S MIHOMYAK | grep -q REJECT \
-  || fail "kill switch chain missing"
-docker exec mihomyak-e2e-gateway mihomyak check >/dev/null || fail "mihomyak check"
-
+echo "== gateway without --dns refuses to start"
 # On a user-defined network Docker's embedded DNS forwards host-inherited
 # upstreams from the host's namespace, past the TUN; an explicit --dns is
 # queried from the gateway's namespace and answered by mihomo (src/gateway/mod.rs).
-echo "== app DNS behind the gateway"
-docker network create mihomyak-e2e >/dev/null
-start mihomyak-e2e-dns --network mihomyak-e2e --dns 1.1.1.1 \
-  --device /dev/net/tun --cap-add NET_ADMIN -e MIHOMYAK_GATEWAY=1
-addr=$(docker run --rm --network container:mihomyak-e2e-dns alpine:3.22 \
-  nslookup -type=a example.com 2>&1 | awk '/^Address/ { last = $2 } END { print last }')
-case "$addr" in
-  198.18.*) echo "example.com -> $addr (fake-ip)" ;;
-  *) fail "app DNS bypassed mihomo: example.com -> '$addr'" ;;
-esac
-docker exec mihomyak-e2e-dns mihomyak check | grep -q "host's resolver" \
-  && fail "DNS warning with an explicit --dns"
 # Without --dns the gateway refuses to start rather than leak.
+docker network create mihomyak-e2e >/dev/null
 if nodns=$(docker run --rm --name mihomyak-e2e-nodns --network mihomyak-e2e \
   --read-only --tmpfs /data --cap-drop ALL --cap-add NET_ADMIN --device /dev/net/tun \
   -e MIHOMYAK_GATEWAY=1 -e "MIHOMYAK_SUB_URL=http://$host_ip:$port/sub/e2e-nodns" \
