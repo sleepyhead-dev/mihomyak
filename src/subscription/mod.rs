@@ -206,14 +206,12 @@ pub fn redact_in(text: &str, urls: &[&str]) -> String {
 fn secrets(url: &str) -> impl Iterator<Item = &str> {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let target = rest.find('/').map_or("", |i| &rest[i..]);
-    target
-        .split(['/', '?', '&', '=', '#'])
-        .filter(|part| {
-            let has = |f: fn(&char) -> bool| part.chars().any(|c| f(&c));
-            part.chars().count() >= 8
-                && (has(char::is_ascii_digit)
-                    || has(char::is_ascii_uppercase) && has(char::is_ascii_lowercase))
-        })
+    target.split(['/', '?', '&', '=', '#']).filter(|part| {
+        let has = |f: fn(&char) -> bool| part.chars().any(|c| f(&c));
+        part.chars().count() >= 8
+            && (has(char::is_ascii_digit)
+                || has(char::is_ascii_uppercase) && has(char::is_ascii_lowercase))
+    })
 }
 
 #[cfg(test)]
@@ -315,7 +313,7 @@ mod tests {
                 "https://mirror.example.net/sub/5f35bd8a-8d50-400f-a6ed-f364372fd3f2?key=Secret99",
                 &urls
             ),
-            "https://mirror.example.net/sub/…f3d2?key=…et99"
+            "https://mirror.example.net/sub/…d3f2?key=…et99"
         );
         // Words and short segments stay readable.
         let plain = "Renew at https://example.com/subscription/cart/4";
